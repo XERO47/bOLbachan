@@ -190,7 +190,7 @@ async function startCapture() {
   // Audio pipeline: MediaStream → ScriptProcessor → PCM int16 chunks
   audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
   const source = audioCtx.createMediaStreamSource(localStream);
-  const bufferSize = Math.floor(SAMPLE_RATE * AUDIO_CHUNK_MS / 1000);  // 640 samples
+  const bufferSize = 1024;  // must be power of 2; 1024 ≈ 64ms at 16kHz
   scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
   source.connect(scriptNode);
   scriptNode.connect(audioCtx.destination);
