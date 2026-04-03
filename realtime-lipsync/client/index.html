@@ -147,21 +147,20 @@ function connectWs(url) {
 
     const view = new DataView(buf);
     const videoSz   = view.getUint32(4, false);
-    // const tsMs   = view.getBigUint64(8, false);  // BigInt, skip for now
     const latencyMs = view.getUint32(16, false);
-    const jpegBytes = new Uint8Array(buf, 20, videoSz);
 
-    // Decode JPEG → draw on canvas
-    const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-    const url  = URL.createObjectURL(blob);
-    const img  = new Image();
-    img.onload = () => {
-      outputCanvas.width  = img.width;
-      outputCanvas.height = img.height;
-      ctx2d.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
+    if (videoSz === 0 || 20 + videoSz > buf.byteLength) {
+      logErr(`bad frame: videoSz=${videoSz} bufLen=${buf.byteLength}`); return;
+    }
 
-      // FPS counter
+    // Use createImageBitmap — more reliable than Image+BlobURL, no revoke timing issues
+    const blob = new Blob([new Uint8Array(buf, 20, videoSz)], { type: 'image/jpeg' });
+    createImageBitmap(blob).then(bitmap => {
+      outputCanvas.width  = bitmap.width;
+      outputCanvas.height = bitmap.height;
+      ctx2d.drawImage(bitmap, 0, 0);
+      bitmap.close();
+
       fpsCounter.frames++;
       const now = performance.now();
       if (now - fpsCounter.last >= 1000) {
@@ -169,8 +168,7 @@ function connectWs(url) {
         fpsCounter.frames = 0;
         fpsCounter.last = now;
       }
-    };
-    img.src = url;
+    }).catch(e => logErr('decode JPEG: ' + e.message));
 
     stats.received++;
     stats.totalLatency += latencyMs;
