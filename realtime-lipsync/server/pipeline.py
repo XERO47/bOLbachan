@@ -103,6 +103,11 @@ class MuseTalkBackend:
         dtype = torch.float16 if self.half else torch.float32
 
         # ── Audio: PCM → temp WAV → whisper features ─────────────────────────
+        # Whisper needs ≥1 s to produce non-empty segments; pad if shorter.
+        MIN_SAMPLES = 16000  # 1 second
+        if len(audio_pcm) < MIN_SAMPLES:
+            audio_pcm = np.pad(audio_pcm, (0, MIN_SAMPLES - len(audio_pcm)))
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp_path = f.name
         try:
@@ -110,6 +115,10 @@ class MuseTalkBackend:
             feat_array = self.audio_processor.audio2feat(tmp_path)
         finally:
             os.unlink(tmp_path)
+
+        if feat_array is None or len(feat_array) == 0:
+            logger.warning("audio2feat returned empty — returning face unchanged")
+            return face_crop
 
         # get_sliced_feature returns (50, 384) for vid_idx=0, fps=25
         audio_feat_np, _ = self.audio_processor.get_sliced_feature(

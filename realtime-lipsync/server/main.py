@@ -181,9 +181,13 @@ async def ws_lipsync(ws: WebSocket):
 
             # Off-load blocking inference to thread pool
             loop = asyncio.get_event_loop()
-            processed = await loop.run_in_executor(
-                _executor, _pipeline.process, frame_bgr, audio_pcm
-            )
+            try:
+                processed = await loop.run_in_executor(
+                    _executor, _pipeline.process, frame_bgr, audio_pcm
+                )
+            except Exception as infer_err:
+                logger.exception("Inference error: %s", infer_err)
+                continue
 
             # ── Encode and send ───────────────────────────────────────────────
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.JPEG_QUALITY]
