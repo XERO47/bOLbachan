@@ -156,10 +156,15 @@ function connectWs(url) {
     // Use createImageBitmap — more reliable than Image+BlobURL, no revoke timing issues
     const blob = new Blob([new Uint8Array(buf, 20, videoSz)], { type: 'image/jpeg' });
     createImageBitmap(blob).then(bitmap => {
-      outputCanvas.width  = bitmap.width;
-      outputCanvas.height = bitmap.height;
+      outputCanvas.width  = bitmap.width  || 640;
+      outputCanvas.height = bitmap.height || 480;
       ctx2d.drawImage(bitmap, 0, 0);
       bitmap.close();
+
+      // Show on-canvas confirmation so we know draw succeeded
+      ctx2d.fillStyle = 'lime';
+      ctx2d.font = '14px monospace';
+      ctx2d.fillText(`frame ${stats.received} ${bitmap.width}x${bitmap.height}`, 8, 20);
 
       fpsCounter.frames++;
       const now = performance.now();
@@ -168,6 +173,8 @@ function connectWs(url) {
         fpsCounter.frames = 0;
         fpsCounter.last = now;
       }
+      document.getElementById('errBar').textContent =
+        `last frame: ${videoSz}B → ${bitmap.width}x${bitmap.height}`;
     }).catch(e => logErr('decode JPEG: ' + e.message));
 
     stats.received++;
