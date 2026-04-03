@@ -32,99 +32,107 @@ logger = logging.getLogger(__name__)
 
 class MuseTalkBackend:
     """
-    Thin wrapper around MuseTalk's inference stack.
-    MuseTalk repo must be on PYTHONPATH (handled by Dockerfile).
+    Wrapper around MuseTalk's actual inference API (V1.5).
+
+    MuseTalk's VAE and UNet are plain Python wrapper classes, NOT nn.Modules,
+    so they cannot be moved with .to(). They handle device placement internally.
+
+    Audio pipeline: PCM float32 → temp WAV → audio2feat() → per-frame whisper features.
+    Whisper needs ≥1 s of audio to return non-empty segments; we buffer accordingly.
     """
 
     def __init__(self, model_dir: str, device: str, half: bool = True):
         self.device = torch.device(device)
         self.half = half
+        self._models_root = Path(model_dir)
         self._load(model_dir)
 
     def _load(self, model_dir: str):
+        import os
         logger.info("Loading MuseTalk models from %s …", model_dir)
+
+        project_root = Path(model_dir).parent
+        models_root  = Path(model_dir)
+
+        # load_all_model resolves VAE path as CWD-relative "models/sd-vae-ft-mse"
+        _prev_cwd = os.getcwd()
+        os.chdir(str(project_root))
+
         try:
             from musetalk.whisper.audio2feature import Audio2Feature
             from musetalk.utils.utils import load_all_model
 
-            # models/ dir is sibling of model_dir's parent:
-            # model_dir = <project>/models  →  project root = model_dir.parent
-            project_root = Path(model_dir).parent
-            models_root  = Path(model_dir)   # <project>/models
-
-            # MuseTalk's load_all_model uses CWD-relative "models/<x>" paths for the VAE.
-            # cd to project root so those resolve correctly.
-            import os
-            _prev_cwd = os.getcwd()
-            os.chdir(str(project_root))
-
             self.audio_processor = Audio2Feature(
                 model_path=str(models_root / "whisper" / "tiny.pt")
             )
+
+            # Returns (VAE wrapper, UNet wrapper, PositionalEncoding nn.Module)
             self.vae, self.unet, self.pe = load_all_model(
                 unet_model_path=str(models_root / "musetalkV15" / "unet.pth"),
                 vae_type="sd-vae-ft-mse",
                 unet_config=str(models_root / "musetalkV15" / "musetalk.json"),
             )
+        finally:
             os.chdir(_prev_cwd)
 
-            self.vae = self.vae.to(self.device)
-            self.unet = self.unet.to(self.device)
-            self.pe = self.pe.to(self.device)
+        # vae and unet are plain wrappers — their inner .vae / .model are nn.Modules
+        # that already moved to CUDA in their __init__. Only pe needs manual placement.
+        dtype = torch.float16 if self.half else torch.float32
+        self.pe = self.pe.to(self.device)
+        if self.half:
+            self.unet.model = self.unet.model.half()
+            self.vae.vae    = self.vae.vae.half()
+            self.vae._use_float16 = True
+            self.pe         = self.pe.half()
 
-            if self.half:
-                self.vae.half()
-                self.unet.half()
-                self.pe.half()
-
-            self.vae.eval()
-            self.unet.eval()
-            logger.info("MuseTalk loaded OK (fp16=%s)", self.half)
-
-        except ImportError as e:
-            raise RuntimeError(
-                "MuseTalk not found on PYTHONPATH. "
-                "Make sure /app/MuseTalk is in PYTHONPATH inside the container."
-            ) from e
+        self.unet.model.eval()
+        self.pe.eval()
+        logger.info("MuseTalk loaded OK (fp16=%s)", self.half)
 
     @torch.inference_mode()
     def infer(self, face_crop: np.ndarray, audio_pcm: np.ndarray) -> np.ndarray:
         """
-        face_crop : (H, W, 3) BGR uint8, H==W==256
-        audio_pcm : float32 PCM, sample_rate=16000, ~200ms context
+        face_crop : (H, W, 3) BGR uint8, resized to 256×256
+        audio_pcm : float32 PCM at 16kHz, ≥1 second recommended
         Returns   : (H, W, 3) BGR uint8 with animated lips
         """
+        import os
+        import tempfile
+        import soundfile as sf
+
         dtype = torch.float16 if self.half else torch.float32
 
-        # 1. Audio → whisper features
-        audio_feat = self.audio_processor.get_audio_feature(audio_pcm, weight_dtype=dtype)
-        audio_feat = audio_feat.to(self.device)
+        # ── Audio: PCM → temp WAV → whisper features ─────────────────────────
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            tmp_path = f.name
+        try:
+            sf.write(tmp_path, audio_pcm, 16000, subtype="PCM_16")
+            feat_array = self.audio_processor.audio2feat(tmp_path)
+        finally:
+            os.unlink(tmp_path)
 
-        # 2. Encode face with VAE
-        face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-        face_t = torch.from_numpy(face_rgb).permute(2, 0, 1).unsqueeze(0)
-        face_t = face_t.to(self.device, dtype=dtype) / 127.5 - 1.0
-        latents = self.vae.encode(face_t).latent_dist.sample()
+        # get_sliced_feature returns (50, 384) for vid_idx=0, fps=25
+        audio_feat_np, _ = self.audio_processor.get_sliced_feature(
+            feat_array, vid_idx=0, fps=25
+        )
+        audio_feat = torch.from_numpy(audio_feat_np).unsqueeze(0).to(self.device, dtype=dtype)
+        audio_feat = self.pe(audio_feat)  # positional encoding → (1, 50, 384)
 
-        # 3. Mask lower-half of face (MuseTalk convention)
-        mask = torch.ones_like(latents)
-        mask[:, :, latents.shape[2] // 2 :, :] = 0
-        masked_latents = latents * mask
+        # ── Face: VAE encode (masked + reference latents) ─────────────────────
+        # vae.get_latents_for_unet accepts BGR numpy (H,W,3)
+        latent_input = self.vae.get_latents_for_unet(face_crop)  # (1, 8, 32, 32)
 
-        # 4. UNet denoising pass (single step, not diffusion — MuseTalk shortcut)
-        timesteps = torch.zeros(1, dtype=torch.long, device=self.device)
-        noise_pred = self.unet(
-            torch.cat([masked_latents, mask], dim=1),
-            timesteps,
-            encoder_hidden_states=audio_feat.unsqueeze(0),
-        ).sample
+        # ── UNet inference ────────────────────────────────────────────────────
+        timestep = torch.tensor([0], device=self.device, dtype=torch.long)
+        pred_latents = self.unet.model(
+            latent_input,
+            timestep,
+            encoder_hidden_states=audio_feat,
+        ).sample  # (1, 4, 32, 32)
 
-        # 5. Decode
-        decoded = self.vae.decode(noise_pred).sample
-        decoded = (decoded.clamp(-1, 1) + 1) / 2 * 255
-        decoded = decoded.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-        result = cv2.cvtColor(decoded, cv2.COLOR_RGB2BGR)
-        return result
+        # ── VAE decode → BGR uint8 ────────────────────────────────────────────
+        output_frames = self.vae.decode_latents(pred_latents)  # list of BGR numpy
+        return output_frames[0]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
