@@ -12,10 +12,17 @@ Binary wire protocol (server → client):
 
 import asyncio
 import logging
+import os
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Dict
+
+# Resolve paths relative to this file so it works both in Docker (/app) and bare metal
+_SERVER_DIR = Path(__file__).parent.resolve()
+_PROJECT_DIR = _SERVER_DIR.parent
+_CLIENT_DIR = Path(os.environ.get("CLIENT_DIR", str(_PROJECT_DIR / "client")))
 
 import cv2
 import numpy as np
@@ -35,7 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Real-time Lip Sync", version="1.0.0")
-app.mount("/static", StaticFiles(directory="/app/client"), name="static")
+app.mount("/static", StaticFiles(directory=str(_CLIENT_DIR)), name="static")
 
 # Global pipeline (loaded once at startup)
 _pipeline: LipSyncPipeline | None = None
@@ -100,7 +107,7 @@ async def info():
 
 @app.get("/")
 async def index():
-    with open("/app/client/index.html") as f:
+    with open(_CLIENT_DIR / "index.html") as f:
         return HTMLResponse(f.read())
 
 
