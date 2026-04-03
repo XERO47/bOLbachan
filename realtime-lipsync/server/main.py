@@ -135,6 +135,7 @@ async def ws_lipsync(ws: WebSocket):
     )
 
     stats = {"frames_in": 0, "frames_out": 0, "total_latency_ms": 0.0}
+    _inference_running = False
 
     try:
         while True:
@@ -142,7 +143,7 @@ async def ws_lipsync(ws: WebSocket):
             recv_time_ms = int(time.time() * 1000)
 
             # ── Parse header ──────────────────────────────────────────────────
-            # [4B type][4B audio_sz][4B video_sz][8B ts_ms]
+            # [4B type][4B audio_sz][4B video_sz][4B ts_hi][4B ts_lo]
             if len(raw) < 20:
                 continue
 
@@ -172,12 +173,16 @@ async def ws_lipsync(ws: WebSocket):
                 if frame is not None:
                     await buffer.add_video(frame, ts_ms)
 
-            # ── Run inference if we have aligned data ─────────────────────────
+            # ── Skip if previous inference still running (avoid queue buildup) ─
+            if _inference_running:
+                continue
+
             pair = await buffer.get_aligned_pair()
             if pair is None:
                 continue
 
             frame_bgr, audio_pcm = pair
+            _inference_running = True
 
             # Off-load blocking inference to thread pool
             loop = asyncio.get_event_loop()
@@ -187,7 +192,10 @@ async def ws_lipsync(ws: WebSocket):
                 )
             except Exception as infer_err:
                 logger.exception("Inference error: %s", infer_err)
+                _inference_running = False
                 continue
+            finally:
+                _inference_running = False
 
             # ── Encode and send ───────────────────────────────────────────────
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.JPEG_QUALITY]

@@ -77,14 +77,7 @@ class FrameAudioBuffer:
             if not self._video:
                 return None
 
-            now_ms = int(time.time() * 1000)
             frame = self._video[-1]  # Most recent frame
-
-            # Drop stale frames
-            if now_ms - frame.timestamp_ms > self.max_lag_ms:
-                self._video.clear()
-                return None
-
             return frame.data.copy(), self._audio_buffer.copy()
 
     def ready(self) -> bool:
