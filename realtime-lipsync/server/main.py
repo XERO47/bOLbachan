@@ -71,7 +71,7 @@ async def startup():
             device=settings.DEVICE,
             half=settings.HALF_PRECISION,
             face_det_interval=settings.FACE_DET_INTERVAL,
-            target_face_size=settings.FRAME_WIDTH,
+            target_face_size=256,  # MuseTalk VAE mask is hardcoded for 256x256
         )
     )
     await loop.run_in_executor(_executor, _pipeline.warmup)
