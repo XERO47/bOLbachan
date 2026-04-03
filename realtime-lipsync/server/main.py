@@ -146,9 +146,10 @@ async def ws_lipsync(ws: WebSocket):
             if len(raw) < 20:
                 continue
 
-            audio_sz = struct.unpack_from(">I", raw, 4)[0]
-            video_sz = struct.unpack_from(">I", raw, 8)[0]
-            ts_ms    = struct.unpack_from(">Q", raw, 12)[0]
+            audio_sz  = struct.unpack_from(">I", raw, 4)[0]
+            video_sz  = struct.unpack_from(">I", raw, 8)[0]
+            ts_hi, ts_lo = struct.unpack_from(">II", raw, 12)
+            ts_ms     = ts_hi * 0x100000000 + ts_lo
 
             if len(raw) < 20 + audio_sz + video_sz:
                 logger.warning("Short message, skipping")

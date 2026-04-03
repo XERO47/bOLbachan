@@ -45,6 +45,7 @@
   .dot.red   { background: #ef4444; }
   .dot.yellow { background: #eab308; }
   #statsBar { font-size: 0.75rem; color: #555; font-variant-numeric: tabular-nums; }
+  #errBar   { font-size: 0.75rem; color: #ef4444; min-height: 1.2em; }
 </style>
 </head>
 <body>
@@ -80,6 +81,7 @@
 </div>
 
 <div id="statsBar">fps out: — &nbsp;|&nbsp; latency: — &nbsp;|&nbsp; frames sent: —</div>
+<div id="errBar"></div>
 
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,39 +229,55 @@ function stopCapture() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Binary frame packing  [4B type][4B audio_sz][4B video_sz][8B ts_ms][audio][video]
 // ─────────────────────────────────────────────────────────────────────────────
-async function sendFrame() {
+function sendFrame() {
+  // setInterval swallows async errors — keep this sync and wrap everything
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!localVideo || localVideo.readyState < 2) return;  // video not playing yet
 
-  // Capture JPEG from camera
   captureCtx.drawImage(localVideo, 0, 0, captureCanvas.width, captureCanvas.height);
-  const jpegBlob = await new Promise(r => captureCanvas.toBlob(r, 'image/jpeg', JPEG_QUALITY));
-  const videoBytes = new Uint8Array(await jpegBlob.arrayBuffer());
 
-  // Drain audio buffer, convert float32→int16
-  const f32Audio = window._pendingAudioBuffer || new Float32Array(0);
-  window._pendingAudioBuffer = null;
-  const i16Audio = new Int16Array(f32Audio.length);
-  for (let i = 0; i < f32Audio.length; i++) {
-    i16Audio[i] = Math.max(-32768, Math.min(32767, Math.round(f32Audio[i] * 32767)));
-  }
-  const audioBytes = new Uint8Array(i16Audio.buffer);
+  captureCanvas.toBlob(blob => {
+    try {
+      if (!blob) { logErr('toBlob returned null'); return; }
+      blob.arrayBuffer().then(videoBuf => {
+        const videoBytes = new Uint8Array(videoBuf);
 
-  const tsMs = BigInt(Date.now());
-  const header = new ArrayBuffer(20);
-  const hv = new DataView(header);
-  // type = "FRAM"
-  hv.setUint8(0, 70); hv.setUint8(1, 82); hv.setUint8(2, 65); hv.setUint8(3, 77);
-  hv.setUint32(4, audioBytes.byteLength, false);
-  hv.setUint32(8, videoBytes.byteLength, false);
-  hv.setBigUint64(12, tsMs, false);
+        // Drain audio, convert float32 → int16
+        const f32Audio = window._pendingAudioBuffer || new Float32Array(0);
+        window._pendingAudioBuffer = null;
+        const i16Audio = new Int16Array(f32Audio.length);
+        for (let i = 0; i < f32Audio.length; i++) {
+          i16Audio[i] = Math.max(-32768, Math.min(32767, Math.round(f32Audio[i] * 32767)));
+        }
+        const audioBytes = new Uint8Array(i16Audio.buffer);
 
-  const msg = new Uint8Array(20 + audioBytes.byteLength + videoBytes.byteLength);
-  msg.set(new Uint8Array(header), 0);
-  msg.set(audioBytes, 20);
-  msg.set(videoBytes, 20 + audioBytes.byteLength);
+        // Header: [4B "FRAM"][4B audio_sz][4B video_sz][4B ts_hi][4B ts_lo]
+        // Avoid BigInt/setBigUint64 for max browser compat — split ts into hi/lo uint32
+        const tsMs = Date.now();
+        const header = new ArrayBuffer(20);
+        const hv = new DataView(header);
+        hv.setUint8(0, 70); hv.setUint8(1, 82); hv.setUint8(2, 65); hv.setUint8(3, 77); // "FRAM"
+        hv.setUint32(4, audioBytes.byteLength, false);
+        hv.setUint32(8, videoBytes.byteLength, false);
+        hv.setUint32(12, Math.floor(tsMs / 0x100000000), false);  // hi 32 bits
+        hv.setUint32(16, tsMs >>> 0, false);                       // lo 32 bits
 
-  ws.send(msg.buffer);
-  stats.sent++;
+        const msg = new Uint8Array(20 + audioBytes.byteLength + videoBytes.byteLength);
+        msg.set(new Uint8Array(header), 0);
+        msg.set(audioBytes, 20);
+        msg.set(videoBytes, 20 + audioBytes.byteLength);
+
+        ws.send(msg.buffer);
+        stats.sent++;
+        updateStats();
+      }).catch(e => logErr('arrayBuffer: ' + e.message));
+    } catch(e) { logErr('sendFrame inner: ' + e.message); }
+  }, 'image/jpeg', JPEG_QUALITY);
+}
+
+function logErr(msg) {
+  console.error('[lipsync]', msg);
+  document.getElementById('errBar').textContent = 'ERR: ' + msg;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
