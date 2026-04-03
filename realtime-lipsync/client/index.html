@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-time Lip Sync</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f0f0f; color: #e0e0e0;
+    font-family: 'Segoe UI', sans-serif;
+    display: flex; flex-direction: column;
+    align-items: center; padding: 24px; gap: 16px;
+  }
+  h1 { font-size: 1.4rem; color: #a78bfa; }
+  .video-row {
+    display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+  }
+  .video-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .video-box label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+  video, canvas {
+    width: 480px; height: 360px;
+    border-radius: 8px; background: #1a1a1a;
+    border: 1px solid #333;
+  }
+  .controls {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;
+  }
+  button {
+    padding: 10px 22px; border: none; border-radius: 6px;
+    font-size: 0.9rem; cursor: pointer; transition: opacity 0.15s;
+  }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #btnStart  { background: #7c3aed; color: #fff; }
+  #btnStop   { background: #dc2626; color: #fff; }
+  #btnVcam   { background: #059669; color: #fff; }
+  .status-bar {
+    display: flex; gap: 24px; font-size: 0.8rem; color: #666;
+  }
+  .dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 5px; background: #555;
+  }
+  .dot.green { background: #22c55e; }
+  .dot.red   { background: #ef4444; }
+  .dot.yellow { background: #eab308; }
+  #statsBar { font-size: 0.75rem; color: #555; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>Real-time Lip Sync</h1>
+
+<div class="video-row">
+  <div class="video-box">
+    <label>Your Camera</label>
+    <video id="localVideo" autoplay muted playsinline></video>
+  </div>
+  <div class="video-box">
+    <label>Lip-synced Output</label>
+    <canvas id="outputCanvas"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnStart">Start</button>
+  <button id="btnStop" disabled>Stop</button>
+  <button id="btnVcam" disabled title="Requires OBS Virtual Camera or v4l2loopback">
+    Send to Virtual Camera
+  </button>
+  <label style="font-size:0.85rem">
+    Server: <input id="serverUrl" type="text" value="ws://localhost:8000/ws/lipsync"
+      style="background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:4px;padding:4px 8px;width:280px">
+  </label>
+</div>
+
+<div class="status-bar">
+  <span><span class="dot" id="dotWs"></span><span id="wsStatus">Disconnected</span></span>
+  <span><span class="dot" id="dotCam"></span><span id="camStatus">No camera</span></span>
+</div>
+
+<div id="statsBar">fps out: — &nbsp;|&nbsp; latency: — &nbsp;|&nbsp; frames sent: —</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+const TARGET_FPS        = 25;
+const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
+const AUDIO_CHUNK_MS    = 40;           // must align with server config
+const JPEG_QUALITY      = 0.7;
+const SAMPLE_RATE       = 16000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+let ws            = null;
+let localStream   = null;
+let audioCtx      = null;
+let scriptNode    = null;
+let captureTimer  = null;
+let stats = { sent: 0, received: 0, totalLatency: 0, lastSentTime: 0, fps: 0 };
+let fpsCounter = { frames: 0, last: performance.now() };
+
+const localVideo    = document.getElementById('localVideo');
+const outputCanvas  = document.getElementById('outputCanvas');
+const ctx2d         = outputCanvas.getContext('2d');
+const btnStart      = document.getElementById('btnStart');
+const btnStop       = document.getElementById('btnStop');
+const btnVcam       = document.getElementById('btnVcam');
+const dotWs         = document.getElementById('dotWs');
+const wsStatusEl    = document.getElementById('wsStatus');
+const dotCam        = document.getElementById('dotCam');
+const camStatusEl   = document.getElementById('camStatus');
+const statsBar      = document.getElementById('statsBar');
+
+// Offscreen capture canvas (shared, resized once)
+const captureCanvas = document.createElement('canvas');
+captureCanvas.width  = 640;
+captureCanvas.height = 480;
+const captureCtx = captureCanvas.getContext('2d');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WebSocket
+// ─────────────────────────────────────────────────────────────────────────────
+function connectWs(url) {
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    setWsStatus('Connected', 'green');
+    btnVcam.disabled = false;
+  };
+
+  ws.onclose = () => {
+    setWsStatus('Disconnected', 'red');
+    btnVcam.disabled = true;
+  };
+
+  ws.onerror = () => setWsStatus('Error', 'red');
+
+  ws.onmessage = (ev) => {
+    const buf = ev.data;
+    if (buf.byteLength < 20) return;
+
+    const view = new DataView(buf);
+    const videoSz   = view.getUint32(4, false);
+    // const tsMs   = view.getBigUint64(8, false);  // BigInt, skip for now
+    const latencyMs = view.getUint32(16, false);
+    const jpegBytes = new Uint8Array(buf, 20, videoSz);
+
+    // Decode JPEG → draw on canvas
+    const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+    const url  = URL.createObjectURL(blob);
+    const img  = new Image();
+    img.onload = () => {
+      outputCanvas.width  = img.width;
+      outputCanvas.height = img.height;
+      ctx2d.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+
+      // FPS counter
+      fpsCounter.frames++;
+      const now = performance.now();
+      if (now - fpsCounter.last >= 1000) {
+        stats.fps = fpsCounter.frames;
+        fpsCounter.frames = 0;
+        fpsCounter.last = now;
+      }
+    };
+    img.src = url;
+
+    stats.received++;
+    stats.totalLatency += latencyMs;
+    updateStats();
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera + Audio capture
+// ─────────────────────────────────────────────────────────────────────────────
+async function startCapture() {
+  localStream = await navigator.mediaDevices.getUserMedia({
+    video: { width: 640, height: 480, frameRate: TARGET_FPS },
+    audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true },
+  });
+  localVideo.srcObject = localStream;
+  setCamStatus('Active', 'green');
+
+  // Audio pipeline: MediaStream → ScriptProcessor → PCM int16 chunks
+  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const source = audioCtx.createMediaStreamSource(localStream);
+  const bufferSize = Math.floor(SAMPLE_RATE * AUDIO_CHUNK_MS / 1000);  // 640 samples
+  scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+  source.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+
+  let pendingAudio = new Float32Array(0);
+
+  scriptNode.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const f32 = e.inputBuffer.getChannelData(0);
+    // Accumulate then send as chunk
+    const combined = new Float32Array(pendingAudio.length + f32.length);
+    combined.set(pendingAudio);
+    combined.set(f32, pendingAudio.length);
+    pendingAudio = combined;
+
+    // We send along with the video frame — just store for next sendFrame()
+    window._pendingAudioBuffer = pendingAudio.slice();
+    pendingAudio = new Float32Array(0);
+  };
+
+  // Video frame pump
+  captureTimer = setInterval(sendFrame, FRAME_INTERVAL_MS);
+}
+
+function stopCapture() {
+  if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+  if (scriptNode)  { scriptNode.disconnect(); scriptNode = null; }
+  if (audioCtx)    { audioCtx.close(); audioCtx = null; }
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  localVideo.srcObject = null;
+  setCamStatus('Stopped', 'yellow');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Binary frame packing  [4B type][4B audio_sz][4B video_sz][8B ts_ms][audio][video]
+// ─────────────────────────────────────────────────────────────────────────────
+async function sendFrame() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Capture JPEG from camera
+  captureCtx.drawImage(localVideo, 0, 0, captureCanvas.width, captureCanvas.height);
+  const jpegBlob = await new Promise(r => captureCanvas.toBlob(r, 'image/jpeg', JPEG_QUALITY));
+  const videoBytes = new Uint8Array(await jpegBlob.arrayBuffer());
+
+  // Drain audio buffer, convert float32→int16
+  const f32Audio = window._pendingAudioBuffer || new Float32Array(0);
+  window._pendingAudioBuffer = null;
+  const i16Audio = new Int16Array(f32Audio.length);
+  for (let i = 0; i < f32Audio.length; i++) {
+    i16Audio[i] = Math.max(-32768, Math.min(32767, Math.round(f32Audio[i] * 32767)));
+  }
+  const audioBytes = new Uint8Array(i16Audio.buffer);
+
+  const tsMs = BigInt(Date.now());
+  const header = new ArrayBuffer(20);
+  const hv = new DataView(header);
+  // type = "FRAM"
+  hv.setUint8(0, 70); hv.setUint8(1, 82); hv.setUint8(2, 65); hv.setUint8(3, 77);
+  hv.setUint32(4, audioBytes.byteLength, false);
+  hv.setUint32(8, videoBytes.byteLength, false);
+  hv.setBigUint64(12, tsMs, false);
+
+  const msg = new Uint8Array(20 + audioBytes.byteLength + videoBytes.byteLength);
+  msg.set(new Uint8Array(header), 0);
+  msg.set(audioBytes, 20);
+  msg.set(videoBytes, 20 + audioBytes.byteLength);
+
+  ws.send(msg.buffer);
+  stats.sent++;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Virtual camera via OBS WebSocket (optional)
+// Requires OBS with Virtual Camera + obs-websocket plugin
+// ─────────────────────────────────────────────────────────────────────────────
+function startVirtualCam() {
+  // Capture the output canvas as a MediaStream and assign to a hidden video
+  // element. The user then selects "Browser Source" or uses OBS Virtual Camera.
+  const stream = outputCanvas.captureStream(TARGET_FPS);
+  const vid = document.createElement('video');
+  vid.srcObject = stream;
+  vid.autoplay = true;
+  vid.muted = true;
+  vid.style.display = 'none';
+  document.body.appendChild(vid);
+  alert(
+    'Output stream captured.\n\n' +
+    'To use as a virtual webcam:\n' +
+    '• Windows/Mac: Install OBS → Start Virtual Camera → Add Browser Source pointing to this page\n' +
+    '• Linux: Use v4l2loopback (see README for ffmpeg command)\n\n' +
+    'Or share this tab\'s screen directly in your video call.'
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function setWsStatus(text, color) {
+  wsStatusEl.textContent = text;
+  dotWs.className = 'dot ' + color;
+}
+function setCamStatus(text, color) {
+  camStatusEl.textContent = text;
+  dotCam.className = 'dot ' + color;
+}
+function updateStats() {
+  const avgLat = stats.received > 0
+    ? Math.round(stats.totalLatency / stats.received) : 0;
+  statsBar.textContent =
+    `fps out: ${stats.fps} | latency: ${avgLat}ms | frames sent: ${stats.sent}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Button handlers
+// ─────────────────────────────────────────────────────────────────────────────
+btnStart.onclick = async () => {
+  btnStart.disabled = true;
+  try {
+    const url = document.getElementById('serverUrl').value.trim();
+    connectWs(url);
+    await startCapture();
+    btnStop.disabled = false;
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btnStart.disabled = false;
+  }
+};
+
+btnStop.onclick = () => {
+  stopCapture();
+  if (ws) { ws.close(); ws = null; }
+  btnStart.disabled = false;
+  btnStop.disabled  = true;
+  btnVcam.disabled  = true;
+  stats = { sent: 0, received: 0, totalLatency: 0, fps: 0 };
+  updateStats();
+};
+
+btnVcam.onclick = startVirtualCam;
+</script>
+</body>
+</html>

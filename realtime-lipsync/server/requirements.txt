@@ -1,0 +1,33 @@
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+websockets==12.0
+python-multipart==0.0.9
+
+# Video/Audio processing
+opencv-python-headless==4.9.0.80
+Pillow==10.2.0
+numpy==1.26.4
+scipy==1.12.0
+soundfile==0.12.1
+librosa==0.10.1
+pyaudio==0.2.14
+
+# Face detection
+mediapipe==0.10.11
+insightface==0.7.3
+onnxruntime-gpu==1.17.1
+
+# Acceleration
+tensorrt==8.6.1           # Optional: for TensorRT optimization
+pycuda==2024.1             # Optional: for TensorRT
+einops==0.7.0
+diffusers==0.27.2
+transformers==4.38.2
+accelerate==0.27.2
+
+# Utilities
+pydantic==2.6.3
+pydantic-settings==2.2.1
+aiofiles==23.2.1
+psutil==5.9.8
+prometheus-client==0.20.0
