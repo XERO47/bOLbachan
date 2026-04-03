@@ -182,20 +182,24 @@ async def ws_lipsync(ws: WebSocket):
                 continue
 
             frame_bgr, audio_pcm = pair
-            _inference_running = True
 
-            # Off-load blocking inference to thread pool
-            loop = asyncio.get_event_loop()
-            try:
-                processed = await loop.run_in_executor(
-                    _executor, _pipeline.process, frame_bgr, audio_pcm
-                )
-            except Exception as infer_err:
-                logger.exception("Inference error: %s", infer_err)
-                _inference_running = False
-                continue
-            finally:
-                _inference_running = False
+            # ── DEBUG: echo raw input frame back (bypass inference) ───────────
+            import os
+            if os.environ.get("ECHO_MODE") == "1":
+                processed = frame_bgr
+            else:
+                _inference_running = True
+                loop = asyncio.get_event_loop()
+                try:
+                    processed = await loop.run_in_executor(
+                        _executor, _pipeline.process, frame_bgr, audio_pcm
+                    )
+                except Exception as infer_err:
+                    logger.exception("Inference error: %s", infer_err)
+                    _inference_running = False
+                    continue
+                finally:
+                    _inference_running = False
 
             # ── Encode and send ───────────────────────────────────────────────
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.JPEG_QUALITY]
