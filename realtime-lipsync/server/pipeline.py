@@ -44,20 +44,29 @@ class MuseTalkBackend:
     def _load(self, model_dir: str):
         logger.info("Loading MuseTalk models from %s …", model_dir)
         try:
-            # MuseTalk exposes these after you clone the repo
             from musetalk.whisper.audio2feature import Audio2Feature
-            from musetalk.models.vae import AutoencoderKL
-            from musetalk.models.unet import UNet2DConditionModel
             from musetalk.utils.utils import load_all_model
 
+            # models/ dir is sibling of model_dir's parent:
+            # model_dir = <project>/models  →  project root = model_dir.parent
+            project_root = Path(model_dir).parent
+            models_root  = Path(model_dir)   # <project>/models
+
+            # MuseTalk's load_all_model uses CWD-relative "models/<x>" paths for the VAE.
+            # cd to project root so those resolve correctly.
+            import os
+            _prev_cwd = os.getcwd()
+            os.chdir(str(project_root))
+
             self.audio_processor = Audio2Feature(
-                model_path=str(Path(model_dir) / "whisper" / "tiny.pt")
+                model_path=str(models_root / "whisper" / "tiny.pt")
             )
             self.vae, self.unet, self.pe = load_all_model(
-                unet_model_path=str(Path(model_dir) / "musetalk" / "pytorch_model.bin"),
+                unet_model_path=str(models_root / "musetalkV15" / "unet.pth"),
                 vae_type="sd-vae-ft-mse",
-                unet_config=str(Path(model_dir) / "musetalk" / "musetalk.json"),
+                unet_config=str(models_root / "musetalkV15" / "musetalk.json"),
             )
+            os.chdir(_prev_cwd)
 
             self.vae = self.vae.to(self.device)
             self.unet = self.unet.to(self.device)
