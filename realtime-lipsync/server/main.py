@@ -130,23 +130,29 @@ const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 const st     = document.getElementById('st');
 let frameN = 0, t0 = Date.now();
+let pending = false;
+const img = new Image();
+
+img.onload = () => {
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(img.src);
+  pending = false;
+  frameN++;
+  if (frameN % 50 === 0)
+    st.textContent = (frameN / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
+};
+img.onerror = () => { URL.revokeObjectURL(img.src); pending = false; };
 
 function connect() {
   const ws = new WebSocket(WS);
   ws.binaryType = 'arraybuffer';
-  ws.onopen  = () => { st.textContent = 'connected'; };
+  ws.onopen  = () => st.textContent = 'connected';
   ws.onclose = () => { st.textContent = 'reconnecting...'; setTimeout(connect, 1500); };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
-    createImageBitmap(new Blob([new Uint8Array(ev.data)], {type:'image/jpeg'}))
-      .then(bmp => {
-        canvas.width = bmp.width; canvas.height = bmp.height;
-        ctx.drawImage(bmp, 0, 0); bmp.close();
-        frameN++;
-        if (frameN % 50 === 0) {
-          st.textContent = (frameN / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
-        }
-      });
+    if (pending) return;          // drop frame if previous not rendered yet
+    pending = true;
+    img.src = URL.createObjectURL(new Blob([new Uint8Array(ev.data)], {type:'image/jpeg'}));
   };
 }
 connect();
