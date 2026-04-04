@@ -22,7 +22,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -98,6 +99,15 @@ async def index():
         return HTMLResponse(f.read())
 
 
+@app.get("/frame.jpg")
+async def latest_frame():
+    """Returns the most recent processed frame as a JPEG."""
+    if not _mjpeg_frame:
+        raise HTTPException(status_code=503, detail="no frame yet")
+    return Response(_mjpeg_frame, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.get("/obs")
 async def obs_page():
     """
@@ -114,40 +124,14 @@ async def obs_page():
 <style>
 * { margin:0; padding:0; }
 body { background:#000; width:640px; height:480px; overflow:hidden; }
-#f { display:block; width:640px; height:480px; object-fit:cover; }
-#st { position:fixed; bottom:4px; left:6px; color:rgba(255,255,255,0.4); font:10px monospace; }
+img { display:block; width:640px; height:480px; }
 </style>
 </head>
 <body>
-<img id="f">
-<div id="st">waiting...</div>
+<img id="f" src="/frame.jpg">
 <script>
-const WS  = 'ws://' + location.host + '/ws/display';
-const fr  = document.getElementById('f');
-const st  = document.getElementById('st');
-let n = 0, t0 = Date.now();
-
-function toBase64(buf) {
-  let b = '', bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.length; i += 8192)
-    b += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
-  return btoa(b);
-}
-
-function connect() {
-  const ws = new WebSocket(WS);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen  = () => st.textContent = 'connected';
-  ws.onclose = () => { st.textContent = 'reconnecting...'; setTimeout(connect, 1500); };
-  ws.onerror = () => ws.close();
-  ws.onmessage = (ev) => {
-    fr.src = 'data:image/jpeg;base64,' + toBase64(ev.data);
-    n++;
-    if (n % 50 === 0)
-      st.textContent = (n / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
-  };
-}
-connect();
+const f = document.getElementById('f');
+setInterval(() => { f.src = '/frame.jpg?t=' + Date.now(); }, 40);
 </script>
 </body>
 </html>"""
