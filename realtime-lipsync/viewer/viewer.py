@@ -125,8 +125,10 @@ def main():
                         help="Camera index (default: 0)")
     parser.add_argument("--fps",    type=int, default=DEFAULT_FPS,
                         help="Target FPS (default: 25)")
-    parser.add_argument("--vcam",   action="store_true",
+    parser.add_argument("--vcam",      action="store_true",
                         help="Push to OBS Virtual Camera via pyvirtualcam")
+    parser.add_argument("--no-window", action="store_true",
+                        help="Headless mode — no OpenCV window (use with OBS /stream.mjpeg)")
     args = parser.parse_args()
 
     # Virtual camera setup
@@ -152,11 +154,15 @@ def main():
     )
     ws_thread.start()
 
-    # OpenCV window — OBS: Add Source → Window Capture → "DeepFace Live"
-    cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_TITLE, 960, 720)
-    print(f"[viewer] Window '{WINDOW_TITLE}' open. Press Q or Esc to quit.")
-    print(f"[viewer] OBS tip: Add Source → Window Capture → select '{WINDOW_TITLE}'")
+    # OpenCV window
+    no_window = args.no_window
+    if not no_window:
+        cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW_TITLE, 960, 720)
+        print(f"[viewer] Window '{WINDOW_TITLE}' open. Press Q or Esc to quit.")
+    else:
+        print("[viewer] Headless mode — no window. OBS: Media Source → http://<server>:8000/stream.mjpeg")
+        print("[viewer] Press Ctrl+C to quit.")
 
     fps_t   = time.time()
     fps_n   = 0
@@ -174,16 +180,24 @@ def main():
             now = time.time()
             if now - fps_t >= 1.0:
                 fps_actual = fps_n / (now - fps_t)
-                cv2.setWindowTitle(WINDOW_TITLE, f"{WINDOW_TITLE}  {fps_actual:.0f} fps  [Q=quit]")
+                if not no_window:
+                    cv2.setWindowTitle(WINDOW_TITLE, f"{WINDOW_TITLE}  {fps_actual:.0f} fps  [Q=quit]")
+                else:
+                    print(f"\r[viewer] {fps_actual:.0f} fps", end="", flush=True)
                 fps_n = 0
                 fps_t = now
 
-            cv2.imshow(WINDOW_TITLE, frame)
+            if not no_window:
+                cv2.imshow(WINDOW_TITLE, frame)
 
             if vcam:
                 f = cv2.resize(frame, (DEFAULT_W, DEFAULT_H))
                 vcam.send(f)
                 vcam.sleep_until_next_frame()
+
+        if no_window:
+            time.sleep(0.001)
+            continue
 
         key = cv2.waitKey(1) & 0xFF
         if key in (ord('q'), ord('Q'), 27):  # Q or Esc

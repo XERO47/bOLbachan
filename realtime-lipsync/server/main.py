@@ -5,14 +5,14 @@ Wire protocol (client → server):  raw JPEG bytes
 Wire protocol (server → client):  raw JPEG bytes
 
 REST:
-  GET  /                      → index.html
+  GET  /                      → index.html (management dashboard)
   GET  /health
+  GET  /stream.mjpeg          → MJPEG stream (add directly in OBS as Media Source)
   POST /api/source-face       → multipart image upload, sets swap target
-  POST /api/settings          → {"enhance": bool, "color_correct": bool}
+  POST /api/settings          → {"enhance": bool, "color_correct": bool, "mouth_scale": float}
 """
 
 import asyncio
-import io
 import logging
 import os
 import time
@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from deepfake_pipeline import DeepFakePipeline
@@ -45,6 +45,10 @@ app.mount("/static", StaticFiles(directory=str(_CLIENT_DIR)), name="static")
 _pipeline: DeepFakePipeline | None = None
 _executor = ThreadPoolExecutor(max_workers=2)
 _active: int = 0
+
+# MJPEG broadcast: last processed frame + list of subscriber queues
+_mjpeg_frame: bytes | None = None
+_mjpeg_subs: list[asyncio.Queue] = []
 
 MAX_CONNECTIONS = int(os.environ.get("MAX_CONNECTIONS", "5"))
 JPEG_QUALITY    = int(os.environ.get("JPEG_QUALITY", "85"))
@@ -91,6 +95,51 @@ async def health():
 async def index():
     with open(_CLIENT_DIR / "index.html") as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/stream.mjpeg")
+async def mjpeg_stream():
+    """
+    MJPEG stream of processed deepfake frames.
+    In OBS: Add Source → Media Source → check 'Local File' OFF → URL:
+      http://<server-ip>:8000/stream.mjpeg
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=4)
+    _mjpeg_subs.append(q)
+
+    async def generate():
+        global _mjpeg_frame
+        try:
+            # Send most recent frame immediately so OBS shows something right away
+            if _mjpeg_frame:
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" +
+                       _mjpeg_frame + b"\r\n")
+            while True:
+                try:
+                    frame_bytes = await asyncio.wait_for(q.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Send a keepalive boundary so OBS doesn't drop the stream
+                    if _mjpeg_frame:
+                        yield (b"--frame\r\n"
+                               b"Content-Type: image/jpeg\r\n\r\n" +
+                               _mjpeg_frame + b"\r\n")
+                    continue
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" +
+                       frame_bytes + b"\r\n")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                _mjpeg_subs.remove(q)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.post("/api/settings")
@@ -199,7 +248,16 @@ async def ws_deepfake(ws: WebSocket):
             if not ok:
                 continue
 
-            await ws.send_bytes(jpg.tobytes())
+            frame_bytes = jpg.tobytes()
+
+            # Broadcast to MJPEG subscribers (OBS / browser)
+            global _mjpeg_frame
+            _mjpeg_frame = frame_bytes
+            for sub_q in list(_mjpeg_subs):
+                if not sub_q.full():
+                    sub_q.put_nowait(frame_bytes)
+
+            await ws.send_bytes(frame_bytes)
             frames_out += 1
             total_lat += time.time() * 1000 - recv_ms
 
