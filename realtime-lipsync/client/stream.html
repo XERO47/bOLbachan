@@ -5,64 +5,100 @@
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { width:640px; height:480px; background:#000; overflow:hidden; }
-canvas { display:block; width:640px; height:480px; }
+#out { display:block; width:640px; height:480px; }
+#info {
+  position:fixed; top:0; left:0; right:0;
+  background:rgba(0,0,0,0.7); color:#0f0; font:12px monospace;
+  padding:4px 8px; white-space:pre;
+}
 </style>
 </head>
 <body>
 <canvas id="out" width="640" height="480"></canvas>
-<video  id="cam" autoplay muted playsinline style="display:none"></video>
+<div id="info">starting...</div>
+<video id="cam" autoplay muted playsinline style="display:none"></video>
+
 <script>
-const WS_URL  = 'ws://' + location.host + '/ws/deepfake';
-const CAP_W   = 640, CAP_H = 480, FPS = 25, Q = 0.82;
+const WS_URL = 'ws://' + location.host + '/ws/deepfake';
+const CAP_W  = 640, CAP_H = 480, FPS = 25, Q = 0.82;
 
-const out    = document.getElementById('out');
-const ctx    = out.getContext('2d');
+const canvas = document.getElementById('out');
+const ctx    = canvas.getContext('2d');
+const info   = document.getElementById('info');
 const cam    = document.getElementById('cam');
-const capCvs = document.createElement('canvas');
-capCvs.width = CAP_W; capCvs.height = CAP_H;
-const capCtx = capCvs.getContext('2d');
 
-let ws, running = false;
+const cap    = document.createElement('canvas');
+cap.width = CAP_W; cap.height = CAP_H;
+const capCtx = cap.getContext('2d');
 
-async function init() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
-  });
-  cam.srcObject = stream;
-  connect();
-}
+let ws, rx = 0, tx = 0, t0 = Date.now();
 
-function connect() {
-  ws = new WebSocket(WS_URL);
-  ws.binaryType = 'arraybuffer';
+function log(msg) { info.textContent = msg; }
 
-  ws.onopen = () => {
-    setInterval(send, 1000 / FPS);
-  };
+// ── Receive & render ──────────────────────────────────────────────────────────
+function renderFrame(data) {
+  const u8 = new Uint8Array(data);
+  // Verify JPEG magic bytes
+  if (u8[0] !== 0xFF || u8[1] !== 0xD8) { log('bad JPEG'); return; }
 
-  ws.onmessage = (ev) => {
-    const blob = new Blob([new Uint8Array(ev.data)], { type: 'image/jpeg' });
-    createImageBitmap(blob).then(bmp => {
-      out.width  = bmp.width;
-      out.height = bmp.height;
-      ctx.drawImage(bmp, 0, 0);
+  const blob = new Blob([u8], { type: 'image/jpeg' });
+  createImageBitmap(blob)
+    .then(bmp => {
+      // Draw without touching canvas.width/height (avoids clearing)
+      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
       bmp.close();
-    }).catch(() => {});
-  };
-
-  ws.onclose = () => setTimeout(connect, 1500);
-  ws.onerror = () => ws.close();
+      rx++;
+      const elapsed = (Date.now() - t0) / 1000;
+      log('rx:' + rx + '  tx:' + tx + '  fps:' + (rx/elapsed).toFixed(1));
+    })
+    .catch(err => {
+      // Fallback: use Image element
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); URL.revokeObjectURL(img.src); rx++; };
+      img.onerror = () => log('render error: ' + err);
+      img.src = URL.createObjectURL(blob);
+    });
 }
 
+// ── Send frames ───────────────────────────────────────────────────────────────
 function send() {
   if (!ws || ws.readyState !== 1 || cam.readyState < 2) return;
   capCtx.drawImage(cam, 0, 0, CAP_W, CAP_H);
-  capCvs.toBlob(blob => {
-    if (blob && ws.readyState === 1) blob.arrayBuffer().then(b => ws.send(b));
+  cap.toBlob(blob => {
+    if (blob && ws.readyState === 1) {
+      blob.arrayBuffer().then(b => { ws.send(b); tx++; });
+    }
   }, 'image/jpeg', Q);
 }
 
-init().catch(e => { document.body.style.color='#f66'; document.body.textContent = 'Camera error: ' + e.message; });
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  log('connecting to ' + WS_URL);
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen    = () => { log('connected — waiting for frames...'); };
+  ws.onmessage = (ev) => renderFrame(ev.data);
+  ws.onclose   = () => { log('disconnected — reconnecting...'); setTimeout(connect, 1500); };
+  ws.onerror   = (e) => { log('ws error'); ws.close(); };
+}
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+async function init() {
+  log('requesting camera...');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
+    });
+    cam.srcObject = stream;
+    log('camera ok — connecting...');
+    connect();
+    setInterval(send, 1000 / FPS);
+  } catch(e) {
+    log('CAMERA ERROR: ' + e.message + '\n\nFix: chrome://flags → unsafely-treat-insecure-origin-as-secure\nAdd: http://' + location.host);
+  }
+}
+
+init();
 </script>
 </body>
 </html>
