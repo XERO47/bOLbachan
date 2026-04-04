@@ -4,9 +4,11 @@ from typing import Literal
 
 class Settings(BaseSettings):
     # Model
-    MODEL_TYPE: Literal["musetalk", "wav2lip"] = "musetalk"
+    MODEL_TYPE: Literal["musetalk", "wav2lip", "avatar"] = "avatar"
     MODEL_DIR: str = "/app/models/musetalk"
     DEVICE: str = "cuda"
+    # Path to avatar reference image (used when MODEL_TYPE=avatar)
+    AVATAR_IMAGE: str = "/workspace/bOLbachan/realtime-lipsync/models/avatar.jpg"
 
     # Stream
     TARGET_FPS: int = 25

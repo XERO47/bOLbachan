@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from config import settings
 from frame_buffer import FrameAudioBuffer
 from pipeline import LipSyncPipeline
+from avatar_pipeline import AvatarPipeline
 
 logging.basicConfig(
     level=settings.LOG_LEVEL.upper(),
@@ -45,7 +46,7 @@ app = FastAPI(title="Real-time Lip Sync", version="1.0.0")
 app.mount("/static", StaticFiles(directory=str(_CLIENT_DIR)), name="static")
 
 # Global pipeline (loaded once at startup)
-_pipeline: LipSyncPipeline | None = None
+_pipeline: LipSyncPipeline | AvatarPipeline | None = None
 # Thread pool for running blocking inference without blocking asyncio
 _executor = ThreadPoolExecutor(max_workers=2)
 # Active connections counter
@@ -61,20 +62,33 @@ MSG_CTRL  = b"CTRL"
 @app.on_event("startup")
 async def startup():
     global _pipeline
-    logger.info("Loading lip sync pipeline …")
     loop = asyncio.get_event_loop()
-    _pipeline = await loop.run_in_executor(
-        _executor,
-        lambda: LipSyncPipeline(
-            model_type=settings.MODEL_TYPE,
-            model_dir=settings.MODEL_DIR,
-            device=settings.DEVICE,
-            half=settings.HALF_PRECISION,
-            face_det_interval=settings.FACE_DET_INTERVAL,
-            target_face_size=256,  # MuseTalk VAE mask is hardcoded for 256x256
+
+    if settings.MODEL_TYPE == "avatar":
+        logger.info("Loading AvatarPipeline (InsightFace + Wav2Lip) …")
+        _pipeline = await loop.run_in_executor(
+            _executor,
+            lambda: AvatarPipeline(
+                avatar_image_path=settings.AVATAR_IMAGE,
+                device_str=settings.DEVICE,
+            )
         )
-    )
-    await loop.run_in_executor(_executor, _pipeline.warmup)
+        await loop.run_in_executor(_executor, _pipeline.warmup)
+    else:
+        logger.info("Loading LipSyncPipeline (%s) …", settings.MODEL_TYPE)
+        _pipeline = await loop.run_in_executor(
+            _executor,
+            lambda: LipSyncPipeline(
+                model_type=settings.MODEL_TYPE,
+                model_dir=settings.MODEL_DIR,
+                device=settings.DEVICE,
+                half=settings.HALF_PRECISION,
+                face_det_interval=settings.FACE_DET_INTERVAL,
+                target_face_size=256,
+            )
+        )
+        await loop.run_in_executor(_executor, _pipeline.warmup)
+
     logger.info("Server ready.")
 
 

@@ -11,7 +11,7 @@ websockets==12.0
 python-multipart==0.0.9
 
 # Video / image
-opencv-python-headless==4.9.0.80
+opencv-python-headless==4.8.1.78
 Pillow==10.2.0
 
 # Audio
