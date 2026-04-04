@@ -232,14 +232,43 @@ input[type=checkbox] { accent-color: #7c3aed; width: 15px; height: 15px; cursor:
   </div>
 </div>
 
-<!-- How to use -->
-<div class="tip">
-  <strong>How to use</strong><br>
-  1. Start server: <code>bash scripts/start_server.sh</code><br>
-  2. Upload a source face above.<br>
-  3. On Windows, run: <code>python viewer/viewer.py</code><br>
-  4. In OBS: <em>Add Source → Window Capture → "DeepFace Live"</em><br>
-  5. Set OBS Virtual Camera as source in Zoom / Meet / Teams.
+<!-- Webcam sender (hidden) -->
+<video id="localVideo" autoplay muted playsinline style="display:none"></video>
+<canvas id="capCanvas" style="display:none"></canvas>
+
+<!-- Cam status card -->
+<div class="card">
+  <div class="card-title">Webcam → Server</div>
+  <div class="status-grid">
+    <div class="pill">
+      <div class="dot" id="dotCam"></div>
+      <div>
+        <div class="pill-label">Camera</div>
+        <div class="pill-val" id="lblCam">Stopped</div>
+      </div>
+    </div>
+    <div class="pill">
+      <div class="dot" id="dotWs"></div>
+      <div>
+        <div class="pill-label">Stream</div>
+        <div class="pill-val" id="lblWs">Disconnected</div>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:4px;">
+    <button id="btnStart" onclick="startStream()"
+      style="flex:1;padding:9px;border:none;border-radius:7px;background:#7c3aed;color:#fff;font-weight:600;cursor:pointer;font-size:0.85rem;">
+      ▶ Start streaming
+    </button>
+    <button id="btnStop" onclick="stopStream()" disabled
+      style="flex:1;padding:9px;border:none;border-radius:7px;background:#333;color:#aaa;font-weight:600;cursor:pointer;font-size:0.85rem;">
+      ■ Stop
+    </button>
+  </div>
+  <div style="font-size:0.7rem;color:#444;margin-top:6px;text-align:center;">
+    Keep this tab open. OBS reads the output at:<br>
+    <span style="color:#7ee787;font-size:0.72rem;" id="mjpegUrl"></span>
+  </div>
 </div>
 
 <script>
@@ -326,8 +355,83 @@ async function postSetting(key, val) {
   } catch(e) { console.warn('settings:', e.message); }
 }
 
+// ── Webcam streaming ──────────────────────────────────────────────────────────
+const TARGET_FPS     = 25;
+const FRAME_INTERVAL = 1000 / TARGET_FPS;
+const JPEG_QUALITY   = 0.8;
+const CAP_W = 640, CAP_H = 480;
+
+let ws = null, localStream = null, captureTimer = null;
+const localVideo = document.getElementById('localVideo');
+const capCanvas  = document.getElementById('capCanvas');
+const capCtx     = capCanvas.getContext('2d');
+capCanvas.width  = CAP_W;
+capCanvas.height = CAP_H;
+
+function getWsUrl() {
+  return getBase().replace(/^http/, 'ws') + '/ws/deepfake';
+}
+
+function connectWs() {
+  ws = new WebSocket(getWsUrl());
+  ws.binaryType = 'arraybuffer';
+  ws.onopen  = () => { setDot('dotWs','green'); document.getElementById('lblWs').textContent = 'Connected'; };
+  ws.onclose = () => { setDot('dotWs','red');   document.getElementById('lblWs').textContent = 'Disconnected'; };
+  ws.onerror = () => { setDot('dotWs','red');   document.getElementById('lblWs').textContent = 'Error'; };
+  ws.onmessage = () => {};
+}
+
+async function startStream() {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: CAP_W, height: CAP_H, frameRate: TARGET_FPS }, audio: false,
+    });
+    localVideo.srcObject = localStream;
+    setDot('dotCam','green'); document.getElementById('lblCam').textContent = 'Active';
+
+    connectWs();
+    captureTimer = setInterval(sendFrame, FRAME_INTERVAL);
+
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnStop').disabled  = false;
+    document.getElementById('btnStop').style.background = '#dc2626';
+    document.getElementById('btnStop').style.color = '#fff';
+  } catch(e) {
+    setDot('dotCam','red'); document.getElementById('lblCam').textContent = e.message;
+  }
+}
+
+function stopStream() {
+  if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+  if (localStream)  { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  if (ws)           { ws.close(); ws = null; }
+  localVideo.srcObject = null;
+  setDot('dotCam',''); document.getElementById('lblCam').textContent = 'Stopped';
+  setDot('dotWs','');  document.getElementById('lblWs').textContent = 'Disconnected';
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled  = true;
+  document.getElementById('btnStop').style.background = '#333';
+  document.getElementById('btnStop').style.color = '#aaa';
+}
+
+function sendFrame() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (localVideo.readyState < 2) return;
+  capCtx.drawImage(localVideo, 0, 0, CAP_W, CAP_H);
+  capCanvas.toBlob(blob => {
+    if (!blob) return;
+    blob.arrayBuffer().then(buf => ws.send(buf));
+  }, 'image/jpeg', JPEG_QUALITY);
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 pollHealth();
+document.getElementById('mjpegUrl').textContent =
+  document.getElementById('serverUrl').value.replace(/\/$/, '') + '/stream.mjpeg';
+document.getElementById('serverUrl').addEventListener('input', () => {
+  document.getElementById('mjpegUrl').textContent =
+    document.getElementById('serverUrl').value.replace(/\/$/, '') + '/stream.mjpeg';
+});
 </script>
 </body>
 </html>
