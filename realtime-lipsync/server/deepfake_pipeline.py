@@ -131,26 +131,14 @@ class DeepFakePipeline:
     def __init__(self):
         import insightface
 
-        # Full analyzer: runs detection + 2D landmarks + 3D landmarks +
-        # gender/age + recognition. Only needed to extract source face embedding.
-        self._full_app = insightface.app.FaceAnalysis(
-            name="buffalo_l",
-            root=str(_PROJECT_DIR),
-            providers=_ORT_PROVIDERS,
-        )
-        self._full_app.prepare(ctx_id=0, det_size=(640, 640))
-
-        # Fast detector: detection only → gives bbox + 5-point kps.
-        # Inswapper only needs kps from the live frame + embedding from source.
-        # Skipping recognition/3D-landmarks/gender saves ~40ms per frame.
         self.face_app = insightface.app.FaceAnalysis(
             name="buffalo_l",
             root=str(_PROJECT_DIR),
-            allowed_modules=["detection"],
             providers=_ORT_PROVIDERS,
         )
-        self.face_app.prepare(ctx_id=0, det_size=(320, 320))
-        logger.info("InsightFace ready (full + fast-detect)")
+        self.face_app.prepare(ctx_id=0, det_size=(640, 640))
+        self._full_app = self.face_app   # same app used for both source and live
+        logger.info("InsightFace FaceAnalysis ready")
 
         if not INSWAPPER_CKPT.exists():
             raise FileNotFoundError(f"inswapper_128.onnx not found at {INSWAPPER_CKPT}")
