@@ -112,36 +112,27 @@ async def obs_page():
 <head>
 <meta charset="UTF-8">
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
+* { margin:0; padding:0; }
 body { background:#000; width:640px; height:480px; overflow:hidden; }
-canvas { display:block; width:640px; height:480px; }
-#st {
-  position:fixed; bottom:4px; left:6px;
-  color:rgba(255,255,255,0.35); font:10px monospace; pointer-events:none;
-}
+#f { display:block; width:640px; height:480px; object-fit:cover; }
+#st { position:fixed; bottom:4px; left:6px; color:rgba(255,255,255,0.4); font:10px monospace; }
 </style>
 </head>
 <body>
-<canvas id="c" width="640" height="480"></canvas>
-<div id="st">waiting for stream...</div>
+<img id="f">
+<div id="st">waiting...</div>
 <script>
-const WS = 'ws://' + location.host + '/ws/display';
-const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
-const st     = document.getElementById('st');
-let frameN = 0, t0 = Date.now();
-let pending = false;
-const img = new Image();
+const WS  = 'ws://' + location.host + '/ws/display';
+const fr  = document.getElementById('f');
+const st  = document.getElementById('st');
+let n = 0, t0 = Date.now();
 
-img.onload = () => {
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  URL.revokeObjectURL(img.src);
-  pending = false;
-  frameN++;
-  if (frameN % 50 === 0)
-    st.textContent = (frameN / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
-};
-img.onerror = () => { URL.revokeObjectURL(img.src); pending = false; };
+function toBase64(buf) {
+  let b = '', bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 8192)
+    b += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return btoa(b);
+}
 
 function connect() {
   const ws = new WebSocket(WS);
@@ -150,9 +141,10 @@ function connect() {
   ws.onclose = () => { st.textContent = 'reconnecting...'; setTimeout(connect, 1500); };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
-    if (pending) return;          // drop frame if previous not rendered yet
-    pending = true;
-    img.src = URL.createObjectURL(new Blob([new Uint8Array(ev.data)], {type:'image/jpeg'}));
+    fr.src = 'data:image/jpeg;base64,' + toBase64(ev.data);
+    n++;
+    if (n % 50 === 0)
+      st.textContent = (n / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
   };
 }
 connect();
