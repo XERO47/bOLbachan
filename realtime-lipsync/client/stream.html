@@ -6,6 +6,10 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { width:640px; height:480px; background:#000; overflow:hidden; }
 #out { display:block; width:640px; height:480px; }
+#camPreview {
+  position:fixed; bottom:4px; right:4px;
+  width:160px; height:120px; border:1px solid #333; object-fit:cover;
+}
 #info {
   position:fixed; top:0; left:0; right:0;
   background:rgba(0,0,0,0.7); color:#0f0; font:12px monospace;
@@ -17,6 +21,7 @@ html, body { width:640px; height:480px; background:#000; overflow:hidden; }
 <canvas id="out" width="640" height="480"></canvas>
 <div id="info">starting...</div>
 <video id="cam" autoplay muted playsinline style="display:none"></video>
+<video id="camPreview" autoplay muted playsinline></video>
 
 <script>
 const WS_URL = 'ws://' + location.host + '/ws/deepfake';
@@ -25,7 +30,8 @@ const CAP_W  = 640, CAP_H = 480, FPS = 25, Q = 0.82;
 const canvas = document.getElementById('out');
 const ctx    = canvas.getContext('2d');
 const info   = document.getElementById('info');
-const cam    = document.getElementById('cam');
+const cam        = document.getElementById('cam');
+const camPreview = document.getElementById('camPreview');
 
 const cap    = document.createElement('canvas');
 cap.width = CAP_W; cap.height = CAP_H;
@@ -90,7 +96,11 @@ async function init() {
       video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
     });
     cam.srcObject = stream;
-    log('camera ok — connecting...');
+    camPreview.srcObject = stream;
+    log('camera ok — waiting for video...');
+    // Wait until video is actually playing before sending frames
+    await new Promise(resolve => { cam.onplaying = resolve; });
+    log('camera playing — connecting...');
     connect();
     setInterval(send, 1000 / FPS);
   } catch(e) {
