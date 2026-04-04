@@ -68,7 +68,7 @@ function renderFrame(data) {
 
 // ── Send frames ───────────────────────────────────────────────────────────────
 function send() {
-  if (!ws || ws.readyState !== 1 || cam.readyState < 2) return;
+  if (!ws || ws.readyState !== 1 || cam.readyState < 3) return;
   capCtx.drawImage(cam, 0, 0, CAP_W, CAP_H);
   cap.toBlob(blob => {
     if (blob && ws.readyState === 1) {
@@ -97,10 +97,7 @@ async function init() {
     });
     cam.srcObject = stream;
     camPreview.srcObject = stream;
-    log('camera ok — waiting for video...');
-    // Wait until video is actually playing before sending frames
-    await new Promise(resolve => { cam.onplaying = resolve; });
-    log('camera playing — connecting...');
+    log('camera ok — connecting...');
     connect();
     setInterval(send, 1000 / FPS);
   } catch(e) {
