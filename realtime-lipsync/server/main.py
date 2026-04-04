@@ -197,12 +197,10 @@ async def mjpeg_stream():
 
 @app.post("/api/settings")
 async def update_settings(body: dict):
-    """Tune mouth_scale at runtime without restarting."""
     if _pipeline is None:
         return JSONResponse({"error": "pipeline not ready"}, status_code=503)
     if "mouth_scale" in body:
         _pipeline.mouth_scale = max(0.0, min(3.0, float(body["mouth_scale"])))
-    logger.info("Settings updated  mouth_scale=%.2f", _pipeline.mouth_scale)
     return {"mouth_scale": _pipeline.mouth_scale}
 
 
