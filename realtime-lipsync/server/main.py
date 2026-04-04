@@ -97,6 +97,103 @@ async def index():
         return HTMLResponse(f.read())
 
 
+@app.get("/obs")
+async def obs_page():
+    """
+    OBS Browser Source page — captures webcam + renders deepfake output.
+    In OBS: Add Source → Browser Source → URL: http://<server>:8000/obs
+    Check 'Control audio via OBS' and set width=640 height=480.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; width:640px; height:480px; overflow:hidden; }
+canvas { display:block; width:640px; height:480px; }
+#status {
+  position:fixed; bottom:6px; left:6px;
+  color:rgba(255,255,255,0.4); font:11px monospace;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="status">connecting...</div>
+<video id="v" autoplay muted playsinline style="display:none"></video>
+<script>
+const WS_URL = 'ws://' + location.host + '/ws/deepfake';
+const CAP_W = 640, CAP_H = 480, FPS = 25, Q = 0.82;
+
+const canvas  = document.getElementById('c');
+const ctx     = canvas.getContext('2d');
+const status  = document.getElementById('status');
+const video   = document.getElementById('v');
+
+const cap     = document.createElement('canvas');
+cap.width = CAP_W; cap.height = CAP_H;
+const capCtx  = cap.getContext('2d');
+
+let ws = null, sending = false, frameN = 0, t0 = Date.now();
+
+async function init() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
+    });
+    video.srcObject = stream;
+    status.textContent = 'cam ok — connecting ws...';
+    connect();
+  } catch(e) {
+    status.textContent = 'cam error: ' + e.message;
+  }
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    status.textContent = 'live';
+    setInterval(sendFrame, 1000 / FPS);
+  };
+
+  ws.onmessage = (ev) => {
+    const blob = new Blob([new Uint8Array(ev.data)], { type: 'image/jpeg' });
+    createImageBitmap(blob).then(bmp => {
+      canvas.width  = bmp.width;
+      canvas.height = bmp.height;
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+      frameN++;
+      if (frameN % 60 === 0) {
+        const fps = (frameN / ((Date.now() - t0) / 1000)).toFixed(0);
+        status.textContent = fps + ' fps';
+      }
+    });
+  };
+
+  ws.onclose = () => { status.textContent = 'reconnecting...'; setTimeout(connect, 2000); };
+  ws.onerror = () => ws.close();
+}
+
+function sendFrame() {
+  if (!ws || ws.readyState !== 1 || video.readyState < 2) return;
+  capCtx.drawImage(video, 0, 0, CAP_W, CAP_H);
+  cap.toBlob(blob => {
+    if (blob && ws.readyState === 1) blob.arrayBuffer().then(b => ws.send(b));
+  }, 'image/jpeg', Q);
+}
+
+init();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+
 @app.get("/stream.mjpeg")
 async def mjpeg_stream():
     """
