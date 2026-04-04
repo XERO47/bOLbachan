@@ -46,9 +46,10 @@ _pipeline: DeepFakePipeline | None = None
 _executor = ThreadPoolExecutor(max_workers=2)
 _active: int = 0
 
-# MJPEG broadcast: last processed frame + list of subscriber queues
+# Broadcast: last processed frame + subscriber queues (MJPEG + WS display)
 _mjpeg_frame: bytes | None = None
 _mjpeg_subs: list[asyncio.Queue] = []
+_display_subs: list[asyncio.Queue] = []
 
 MAX_CONNECTIONS = int(os.environ.get("MAX_CONNECTIONS", "5"))
 JPEG_QUALITY    = int(os.environ.get("JPEG_QUALITY", "85"))
@@ -100,9 +101,11 @@ async def index():
 @app.get("/obs")
 async def obs_page():
     """
-    OBS Browser Source page — captures webcam + renders deepfake output.
+    OBS Browser Source — display only, no camera needed.
+    Connects to /ws/display and renders processed frames.
     In OBS: Add Source → Browser Source → URL: http://<server>:8000/obs
-    Check 'Control audio via OBS' and set width=640 height=480.
+    Width: 640, Height: 480. No special permissions needed.
+    Keep the dashboard tab open with streaming active to push webcam frames.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -112,82 +115,41 @@ async def obs_page():
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#000; width:640px; height:480px; overflow:hidden; }
 canvas { display:block; width:640px; height:480px; }
-#status {
-  position:fixed; bottom:6px; left:6px;
-  color:rgba(255,255,255,0.4); font:11px monospace;
-  pointer-events:none;
+#st {
+  position:fixed; bottom:4px; left:6px;
+  color:rgba(255,255,255,0.35); font:10px monospace; pointer-events:none;
 }
 </style>
 </head>
 <body>
 <canvas id="c" width="640" height="480"></canvas>
-<div id="status">connecting...</div>
-<video id="v" autoplay muted playsinline style="display:none"></video>
+<div id="st">waiting for stream...</div>
 <script>
-const WS_URL = 'ws://' + location.host + '/ws/deepfake';
-const CAP_W = 640, CAP_H = 480, FPS = 25, Q = 0.82;
-
-const canvas  = document.getElementById('c');
-const ctx     = canvas.getContext('2d');
-const status  = document.getElementById('status');
-const video   = document.getElementById('v');
-
-const cap     = document.createElement('canvas');
-cap.width = CAP_W; cap.height = CAP_H;
-const capCtx  = cap.getContext('2d');
-
-let ws = null, sending = false, frameN = 0, t0 = Date.now();
-
-async function init() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
-    });
-    video.srcObject = stream;
-    status.textContent = 'cam ok — connecting ws...';
-    connect();
-  } catch(e) {
-    status.textContent = 'cam error: ' + e.message;
-  }
-}
+const WS = 'ws://' + location.host + '/ws/display';
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const st     = document.getElementById('st');
+let frameN = 0, t0 = Date.now();
 
 function connect() {
-  ws = new WebSocket(WS_URL);
+  const ws = new WebSocket(WS);
   ws.binaryType = 'arraybuffer';
-
-  ws.onopen = () => {
-    status.textContent = 'live';
-    setInterval(sendFrame, 1000 / FPS);
-  };
-
-  ws.onmessage = (ev) => {
-    const blob = new Blob([new Uint8Array(ev.data)], { type: 'image/jpeg' });
-    createImageBitmap(blob).then(bmp => {
-      canvas.width  = bmp.width;
-      canvas.height = bmp.height;
-      ctx.drawImage(bmp, 0, 0);
-      bmp.close();
-      frameN++;
-      if (frameN % 60 === 0) {
-        const fps = (frameN / ((Date.now() - t0) / 1000)).toFixed(0);
-        status.textContent = fps + ' fps';
-      }
-    });
-  };
-
-  ws.onclose = () => { status.textContent = 'reconnecting...'; setTimeout(connect, 2000); };
+  ws.onopen  = () => { st.textContent = 'connected'; };
+  ws.onclose = () => { st.textContent = 'reconnecting...'; setTimeout(connect, 1500); };
   ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    createImageBitmap(new Blob([new Uint8Array(ev.data)], {type:'image/jpeg'}))
+      .then(bmp => {
+        canvas.width = bmp.width; canvas.height = bmp.height;
+        ctx.drawImage(bmp, 0, 0); bmp.close();
+        frameN++;
+        if (frameN % 50 === 0) {
+          st.textContent = (frameN / ((Date.now()-t0)/1000)).toFixed(0) + ' fps';
+        }
+      });
+  };
 }
-
-function sendFrame() {
-  if (!ws || ws.readyState !== 1 || video.readyState < 2) return;
-  capCtx.drawImage(video, 0, 0, CAP_W, CAP_H);
-  cap.toBlob(blob => {
-    if (blob && ws.readyState === 1) blob.arrayBuffer().then(b => ws.send(b));
-  }, 'image/jpeg', Q);
-}
-
-init();
+connect();
 </script>
 </body>
 </html>"""
@@ -333,10 +295,10 @@ async def ws_deepfake(ws: WebSocket):
 
             frame_bytes = jpg.tobytes()
 
-            # Broadcast to MJPEG subscribers (OBS / browser)
+            # Broadcast to all passive subscribers (MJPEG + WS display)
             global _mjpeg_frame
             _mjpeg_frame = frame_bytes
-            for sub_q in list(_mjpeg_subs):
+            for sub_q in list(_mjpeg_subs) + list(_display_subs):
                 if not sub_q.full():
                     sub_q.put_nowait(frame_bytes)
 
@@ -352,6 +314,34 @@ async def ws_deepfake(ws: WebSocket):
         _active -= 1
         avg = total_lat / frames_out if frames_out else 0
         logger.info("Disconnected  in=%d out=%d avg_lat=%.0fms", frames_in, frames_out, avg)
+
+
+# ── Display WebSocket (passive — no camera, just receives frames) ──────────────
+
+@app.websocket("/ws/display")
+async def ws_display(ws: WebSocket):
+    """
+    Passive subscriber: receives every processed frame as raw JPEG bytes.
+    Used by the /obs Browser Source page — no camera permission needed.
+    """
+    await ws.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=4)
+    _display_subs.append(q)
+    logger.info("Display subscriber connected  total=%d", len(_display_subs))
+    try:
+        while True:
+            frame_bytes = await asyncio.wait_for(q.get(), timeout=10.0)
+            await ws.send_bytes(frame_bytes)
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        pass
+    except Exception as e:
+        logger.warning("Display WS error: %s", e)
+    finally:
+        try:
+            _display_subs.remove(q)
+        except ValueError:
+            pass
+        logger.info("Display subscriber disconnected  total=%d", len(_display_subs))
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────────
