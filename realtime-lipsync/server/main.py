@@ -161,7 +161,7 @@ async def mjpeg_stream():
 
     def _mjpeg_part(data: bytes) -> bytes:
         return (
-            b"--frame\r\n"
+            b"--jpgboundary\r\n"
             b"Content-Type: image/jpeg\r\n"
             b"Content-Length: " + str(len(data)).encode() + b"\r\n"
             b"\r\n" +
@@ -190,7 +190,8 @@ async def mjpeg_stream():
 
     return StreamingResponse(
         generate(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
+        media_type="multipart/x-mixed-replace; boundary=jpgboundary",
+        headers={"Connection": "keep-alive"},
     )
 
 
