@@ -107,27 +107,27 @@ async def mjpeg_stream():
     q: asyncio.Queue = asyncio.Queue(maxsize=4)
     _mjpeg_subs.append(q)
 
+    def _mjpeg_part(data: bytes) -> bytes:
+        return (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            b"Content-Length: " + str(len(data)).encode() + b"\r\n"
+            b"\r\n" +
+            data + b"\r\n"
+        )
+
     async def generate():
-        global _mjpeg_frame
         try:
-            # Send most recent frame immediately so OBS shows something right away
             if _mjpeg_frame:
-                yield (b"--frame\r\n"
-                       b"Content-Type: image/jpeg\r\n\r\n" +
-                       _mjpeg_frame + b"\r\n")
+                yield _mjpeg_part(_mjpeg_frame)
             while True:
                 try:
-                    frame_bytes = await asyncio.wait_for(q.get(), timeout=5.0)
+                    frame_bytes = await asyncio.wait_for(q.get(), timeout=3.0)
                 except asyncio.TimeoutError:
-                    # Send a keepalive boundary so OBS doesn't drop the stream
                     if _mjpeg_frame:
-                        yield (b"--frame\r\n"
-                               b"Content-Type: image/jpeg\r\n\r\n" +
-                               _mjpeg_frame + b"\r\n")
+                        yield _mjpeg_part(_mjpeg_frame)
                     continue
-                yield (b"--frame\r\n"
-                       b"Content-Type: image/jpeg\r\n\r\n" +
-                       frame_bytes + b"\r\n")
+                yield _mjpeg_part(frame_bytes)
         except asyncio.CancelledError:
             pass
         finally:
@@ -144,27 +144,13 @@ async def mjpeg_stream():
 
 @app.post("/api/settings")
 async def update_settings(body: dict):
-    """Toggle enhance / color_correct at runtime without restarting."""
+    """Tune mouth_scale at runtime without restarting."""
     if _pipeline is None:
         return JSONResponse({"error": "pipeline not ready"}, status_code=503)
-    if "enhance" in body:
-        val = bool(body["enhance"])
-        if val and not _pipeline._use_enhance:
-            # Load GFPGAN on demand
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(_executor, _pipeline._load_gfpgan)
-        _pipeline._use_enhance = val and _pipeline.enhancer is not None
-    if "color_correct" in body:
-        _pipeline._use_color = bool(body["color_correct"])
     if "mouth_scale" in body:
         _pipeline.mouth_scale = max(0.0, min(3.0, float(body["mouth_scale"])))
-    logger.info("Settings updated  enhance=%s  color=%s  mouth_scale=%.2f",
-                _pipeline._use_enhance, _pipeline._use_color, _pipeline.mouth_scale)
-    return {
-        "enhance": _pipeline._use_enhance,
-        "color_correct": _pipeline._use_color,
-        "mouth_scale": _pipeline.mouth_scale,
-    }
+    logger.info("Settings updated  mouth_scale=%.2f", _pipeline.mouth_scale)
+    return {"mouth_scale": _pipeline.mouth_scale}
 
 
 @app.post("/api/source-face")
