@@ -1,18 +1,21 @@
 """
 Real-time DeepFace pipeline — InsightFace inswapper_128.
 
-DeepFaceLive-style face mask:
-  After the swap, use the 106 facial landmarks to build a precise
-  face-polygon mask, then alpha-blend the swap result onto the original
-  frame.  This gives a natural face-shaped boundary with soft edges —
-  no hard rectangular paste, no visible seam around the mouth/chin.
+DeepFaceLive-style masking (two-layer):
 
-  The mask is feathered with a small kernel (fast) so it adds ~2ms
-  while keeping the output at 25fps+.
+  Layer 1 — Face mask (106 landmarks convex hull):
+    After the swap, blend the result onto the original using a precise
+    face-polygon mask.  Natural boundary at chin/jaw/cheeks/forehead.
+
+  Layer 2 — Mouth cutout (real mouth shows through):
+    Cut the mouth region out of the swap and fill it with the ORIGINAL
+    live frame.  Your real lips are always visible — expression and
+    lip movement come directly from the webcam, not the swap model.
+    Exactly how DeepFaceLive's mouth mask works.
 
 Face cache:
-  If detection drops a frame (side angle, occlusion) the last known
-  face is reused so the swap holds instead of snapping to raw webcam.
+  If detection drops a frame the last known face is reused so the
+  swap holds instead of snapping back to raw webcam.
 """
 
 from __future__ import annotations
@@ -28,40 +31,57 @@ logger = logging.getLogger(__name__)
 _PROJECT_DIR   = Path(__file__).parent.parent.resolve()
 INSWAPPER_CKPT = _PROJECT_DIR / "models" / "inswapper_128.onnx"
 _ORT_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-_MAX_CACHE     = 5   # max frames to reuse cached face when detection drops
+_MAX_CACHE     = 5
 
 
-# ── Face mask from 106 landmarks ─────────────────────────────────────────────
+# ── Masks ─────────────────────────────────────────────────────────────────────
 
-def _face_mask_106(shape, landmark_2d_106: np.ndarray) -> np.ndarray:
-    """
-    Build a soft face polygon mask from InsightFace 106 2D landmarks.
-
-    The convex hull of all 106 points tightly wraps the face including
-    the chin, cheeks, and forehead.  We feather the edges with a small
-    GaussianBlur so the blend fades naturally into the neck/hair.
-
-    Returns uint8 mask (0-255), same H×W as `shape`.
-    """
+def _face_mask_106(shape, lm106: np.ndarray) -> np.ndarray:
+    """Convex hull of 106 landmarks → soft face boundary mask."""
     h, w = shape[:2]
-    pts = landmark_2d_106.astype(np.int32)
-
-    # Convex hull of all 106 points → precise face boundary
-    hull = cv2.convexHull(pts)
-
+    hull = cv2.convexHull(lm106.astype(np.int32))
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, hull, 255)
-
-    # Small feather — 31px is fast and gives a smooth edge
-    mask = cv2.GaussianBlur(mask, (31, 31), 11)
-    return mask
+    return cv2.GaussianBlur(mask, (31, 31), 11)
 
 
-def _blend(swapped: np.ndarray, original: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Alpha-blend swapped frame onto original using the face mask."""
+def _mouth_mask(shape, kps: np.ndarray) -> np.ndarray:
+    """
+    Soft ellipse over the mouth + chin region, derived from the 5-point kps:
+      kps[2] = nose tip  (top boundary of mouth region)
+      kps[3] = left mouth corner
+      kps[4] = right mouth corner
+
+    Returns mask where 255 = show original live mouth, 0 = show swap.
+    """
+    h, w = shape[:2]
+
+    nose       = kps[2]
+    lm_corner  = kps[3]
+    rm_corner  = kps[4]
+
+    # Centre of mouth
+    cx = int((lm_corner[0] + rm_corner[0]) / 2)
+    cy = int((lm_corner[1] + rm_corner[1]) / 2)
+
+    # Horizontal radius: slightly wider than mouth corner span
+    rx = int(np.linalg.norm(rm_corner - lm_corner) * 0.75)
+
+    # Vertical radius: from above mouth corners down to estimated chin
+    # chin ≈ mouth_y + (mouth_y − nose_y) * 0.9
+    chin_y  = cy + int((cy - nose[1]) * 0.9)
+    ry = max(rx // 2, (chin_y - cy))
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+    return cv2.GaussianBlur(mask, (31, 31), 11)
+
+
+def _blend(src: np.ndarray, dst: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """src * mask + dst * (1-mask)"""
     a = mask[:, :, None].astype(np.float32) / 255.0
-    return (swapped.astype(np.float32) * a +
-            original.astype(np.float32) * (1.0 - a)).astype(np.uint8)
+    return (src.astype(np.float32) * a +
+            dst.astype(np.float32) * (1.0 - a)).astype(np.uint8)
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -132,8 +152,17 @@ class DeepFakePipeline:
         ref = live_faces[0]
         lm = getattr(ref, "landmark_2d_106", None)
         if lm is not None:
-            mask = _face_mask_106(frame_bgr.shape, lm)
-            return _blend(swapped, frame_bgr, mask)
+            # Layer 1: blend swap onto original using face boundary mask
+            face_mask = _face_mask_106(frame_bgr.shape, lm)
+            result = _blend(swapped, frame_bgr, face_mask)
+
+            # Layer 2: cut mouth hole — show real live lips on top
+            kps = getattr(ref, "kps", None)
+            if kps is not None and len(kps) >= 5:
+                mm = _mouth_mask(frame_bgr.shape, kps)
+                result = _blend(frame_bgr, result, mm)
+
+            return result
 
         # Fallback: return raw inswapper result
         return swapped
