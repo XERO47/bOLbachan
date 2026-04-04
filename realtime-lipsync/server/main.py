@@ -108,6 +108,17 @@ async def latest_frame():
                     headers={"Cache-Control": "no-store"})
 
 
+@app.get("/stream")
+async def stream_page():
+    """
+    Full self-contained stream page — captures webcam AND displays deepfake.
+    OBS: Add Source → Browser Source → http://<server>:8000/stream
+    Width: 640, Height: 480. Allow camera when prompted.
+    """
+    html = open(_CLIENT_DIR / "stream.html").read()
+    return HTMLResponse(html)
+
+
 @app.get("/obs")
 async def obs_page():
     """

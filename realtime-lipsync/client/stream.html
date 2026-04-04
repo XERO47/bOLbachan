@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:640px; height:480px; background:#000; overflow:hidden; }
+canvas { display:block; width:640px; height:480px; }
+</style>
+</head>
+<body>
+<canvas id="out" width="640" height="480"></canvas>
+<video  id="cam" autoplay muted playsinline style="display:none"></video>
+<script>
+const WS_URL  = 'ws://' + location.host + '/ws/deepfake';
+const CAP_W   = 640, CAP_H = 480, FPS = 25, Q = 0.82;
+
+const out    = document.getElementById('out');
+const ctx    = out.getContext('2d');
+const cam    = document.getElementById('cam');
+const capCvs = document.createElement('canvas');
+capCvs.width = CAP_W; capCvs.height = CAP_H;
+const capCtx = capCvs.getContext('2d');
+
+let ws, running = false;
+
+async function init() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: CAP_W, height: CAP_H, frameRate: FPS }, audio: false
+  });
+  cam.srcObject = stream;
+  connect();
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    setInterval(send, 1000 / FPS);
+  };
+
+  ws.onmessage = (ev) => {
+    const blob = new Blob([new Uint8Array(ev.data)], { type: 'image/jpeg' });
+    createImageBitmap(blob).then(bmp => {
+      out.width  = bmp.width;
+      out.height = bmp.height;
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+    }).catch(() => {});
+  };
+
+  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onerror = () => ws.close();
+}
+
+function send() {
+  if (!ws || ws.readyState !== 1 || cam.readyState < 2) return;
+  capCtx.drawImage(cam, 0, 0, CAP_W, CAP_H);
+  capCvs.toBlob(blob => {
+    if (blob && ws.readyState === 1) blob.arrayBuffer().then(b => ws.send(b));
+  }, 'image/jpeg', Q);
+}
+
+init().catch(e => { document.body.style.color='#f66'; document.body.textContent = 'Camera error: ' + e.message; });
+</script>
+</body>
+</html>
