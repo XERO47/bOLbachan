@@ -113,7 +113,7 @@ class DeepFakePipeline:
         self._source_face  = None
         self._cached_faces = None
         self._missed       = 0
-        self.mouth_scale   = 1.0   # tunable: 0=no cutout, 1=default, 2=large
+        self.mouth_scale   = 0.15  # tunable: 0=no cutout, 0.15=default, 2=large
         logger.info("DeepFakePipeline ready")
 
     def set_source(self, image_bgr: np.ndarray) -> str:

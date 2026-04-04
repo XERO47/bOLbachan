@@ -1,28 +1,34 @@
 #!/usr/bin/env bash
-# Start the avatar pipeline server. Run from anywhere.
+# ─────────────────────────────────────────────────────────────────────────────
+# Start the DeepFace Live server.
+# Usage:
+#   bash scripts/start_server.sh
+#   SOURCE_FACE=/path/to/face.jpg bash scripts/start_server.sh
+# ─────────────────────────────────────────────────────────────────────────────
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$PROJECT_DIR/models"
 
-AVATAR_IMAGE="${AVATAR_IMAGE:-$MODELS_DIR/avatar.jpg}"
+# Default source face — upload a different one via /api/source-face anytime
+SOURCE_FACE="${SOURCE_FACE:-$MODELS_DIR/avatar.jpg}"
 
-if [ ! -f "$AVATAR_IMAGE" ]; then
-  echo "ERROR: Avatar image not found at $AVATAR_IMAGE"
-  echo "Upload your face photo: scp face.jpg root@<IP>:$AVATAR_IMAGE"
-  exit 1
+if [ ! -f "$SOURCE_FACE" ]; then
+  echo "INFO: No source face at $SOURCE_FACE — upload one via the dashboard after starting."
+  SOURCE_FACE=""
 fi
 
 # Kill any previous server
 pkill -f "python main.py" 2>/dev/null || true
 sleep 1
 
-echo "Starting AvatarPipeline server..."
-echo "  Avatar: $AVATAR_IMAGE"
-echo "  Lip sync: ${ENABLE_LIP_SYNC:-0}"
+echo "═══════════════════════════════════════════════"
+echo " Starting DeepFace Live server"
+[ -n "$SOURCE_FACE" ] && echo "  Source face: $SOURCE_FACE"
+echo "  Dashboard:   http://localhost:8000"
+echo "  WebSocket:   ws://localhost:8000/ws/deepfake"
+echo "═══════════════════════════════════════════════"
 
 cd "$PROJECT_DIR/server"
 exec env \
-  MODEL_TYPE=avatar \
-  AVATAR_IMAGE="$AVATAR_IMAGE" \
-  ENABLE_LIP_SYNC="${ENABLE_LIP_SYNC:-0}" \
+  SOURCE_FACE="$SOURCE_FACE" \
   PYTHONPATH="$PROJECT_DIR/server" \
   python main.py

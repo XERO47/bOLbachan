@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DeepFace Live</title>
+<title>DeepFace — Dashboard</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -15,566 +15,319 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px;
-  gap: 18px;
+  padding: 32px 20px;
+  gap: 24px;
 }
 
-h1 {
-  font-size: 1.3rem;
-  font-weight: 600;
-  color: #a78bfa;
-  letter-spacing: 1px;
-}
+h1 { font-size: 1.2rem; font-weight: 600; color: #a78bfa; letter-spacing: 1px; }
+.subtitle { font-size: 0.75rem; color: #555; margin-top: 2px; }
 
-/* ── Main layout: source | arrow | output ── */
-.stage {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.panel {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.panel-label {
-  font-size: 0.7rem;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-/* Source face drop zone */
-#dropZone {
-  width: 240px;
-  height: 240px;
-  border: 2px dashed #444;
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-  position: relative;
-  overflow: hidden;
-  background: #1a1a1a;
-}
-#dropZone:hover, #dropZone.drag-over {
-  border-color: #7c3aed;
-  background: #1e1a2e;
-}
-#dropZone img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 10px;
-}
-#dropZone .placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  color: #555;
-  font-size: 0.8rem;
-  pointer-events: none;
-}
-#dropZone .placeholder svg {
-  width: 40px; height: 40px; fill: #444;
-}
-#faceBadge {
-  position: absolute;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #22c55e;
-  color: #000;
-  font-size: 0.65rem;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 20px;
-  display: none;
-}
-#fileInput { display: none; }
-
-/* Arrow */
-.arrow {
-  font-size: 2rem;
-  color: #444;
-}
-
-/* Output canvas */
-#outputCanvas {
-  width: 480px;
-  height: 360px;
-  background: #111;
-  border-radius: 10px;
-  border: 1px solid #2a2a2a;
-  display: block;
-}
-
-/* Small cam preview */
-#localVideo {
-  width: 160px;
-  height: 120px;
-  border-radius: 8px;
-  background: #111;
+.card {
+  background: #141414;
   border: 1px solid #222;
-  object-fit: cover;
-}
-
-/* Controls */
-.controls {
+  border-radius: 12px;
+  padding: 22px 28px;
+  width: 100%;
+  max-width: 520px;
   display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
 }
-
-button {
-  padding: 9px 20px;
-  border: none;
-  border-radius: 7px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
-}
-button:active { transform: scale(0.97); }
-button:disabled { opacity: 0.35; cursor: default; }
-
-#btnStart  { background: #7c3aed; color: #fff; }
-#btnStop   { background: #dc2626; color: #fff; }
-#btnShare  { background: #0284c7; color: #fff; }
-
-/* Status row */
-.status-row {
-  display: flex;
-  gap: 20px;
-  font-size: 0.75rem;
+.card-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
   color: #555;
+  border-bottom: 1px solid #1e1e1e;
+  padding-bottom: 10px;
+}
+
+/* Status pills */
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pill {
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
   align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
 }
 .dot {
-  display: inline-block;
-  width: 7px; height: 7px;
+  width: 8px; height: 8px;
   border-radius: 50%;
-  margin-right: 5px;
+  flex-shrink: 0;
   background: #333;
 }
 .dot.green  { background: #22c55e; }
 .dot.red    { background: #ef4444; }
 .dot.yellow { background: #eab308; }
+.pill-label { color: #555; font-size: 0.65rem; margin-bottom: 1px; }
+.pill-val   { color: #ccc; font-size: 0.78rem; }
 
-#statsBar { font-size: 0.72rem; color: #555; font-variant-numeric: tabular-nums; }
-#errBar   { font-size: 0.72rem; color: #ef4444; min-height: 1em; }
+/* Drop zone */
+#dropZone {
+  border: 2px dashed #333;
+  border-radius: 10px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: #0f0f0f;
+  position: relative;
+  min-height: 120px;
+}
+#dropZone:hover, #dropZone.drag-over {
+  border-color: #7c3aed;
+  background: #1a1527;
+}
+#dropZone .hint { font-size: 0.78rem; color: #555; text-align: center; }
+#dropZone .face-name { font-size: 0.75rem; color: #a78bfa; }
+#faceBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #22c55e;
+  display: none;
+}
+#faceErr { font-size: 0.7rem; color: #ef4444; display: none; }
+#fileInput { display: none; }
 
-/* Server URL */
+/* Settings */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+.setting-label { color: #aaa; }
+.setting-right { display: flex; align-items: center; gap: 8px; }
+
+input[type=range] {
+  accent-color: #7c3aed;
+  width: 110px;
+}
+.range-val { color: #a78bfa; font-size: 0.78rem; min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+
+input[type=checkbox] { accent-color: #7c3aed; width: 15px; height: 15px; cursor: pointer; }
+
+/* Server row */
 .server-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: #555;
 }
 .server-row input {
-  background: #1a1a1a;
-  color: #aaa;
-  border: 1px solid #333;
-  border-radius: 5px;
-  padding: 4px 8px;
-  width: 260px;
-  font-size: 0.8rem;
+  flex: 1;
+  background: #0f0f0f;
+  color: #888;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
 }
 
-/* Share overlay */
-#shareOverlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.8);
-  z-index: 100;
-  align-items: center;
-  justify-content: center;
-}
-#shareOverlay.show { display: flex; }
-.share-card {
-  background: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 12px;
-  padding: 28px 32px;
-  max-width: 420px;
-  width: 90%;
-}
-.share-card h2 { font-size: 1rem; margin-bottom: 14px; color: #a78bfa; }
-.share-card p  { font-size: 0.8rem; color: #888; margin-bottom: 10px; line-height: 1.5; }
-.share-card code {
-  display: block;
-  background: #111;
-  padding: 8px 12px;
-  border-radius: 6px;
+/* Tip box */
+.tip {
+  background: #0f0f18;
+  border: 1px solid #2a2040;
+  border-radius: 8px;
+  padding: 14px 18px;
   font-size: 0.75rem;
-  color: #7ee787;
-  margin-bottom: 12px;
+  color: #666;
+  line-height: 1.7;
+  max-width: 520px;
+  width: 100%;
 }
-.share-card button { margin-top: 4px; width: 100%; }
-#btnCloseShare { background: #333; color: #ccc; }
+.tip strong { color: #a78bfa; }
+.tip code {
+  background: #111;
+  color: #7ee787;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
 </style>
 </head>
 <body>
 
 <h1>DeepFace Live</h1>
+<div class="subtitle">Management Dashboard — stream runs in viewer.py</div>
 
-<div class="stage">
+<!-- Server -->
+<div class="card" style="max-width:520px;gap:10px;padding:14px 20px;">
+  <div class="server-row">
+    Server:
+    <input id="serverUrl" type="text" value="http://localhost:8000" oninput="scheduleHealthPoll()">
+  </div>
+</div>
 
-  <!-- Source face panel -->
-  <div class="panel">
-    <div class="panel-label">Source face</div>
-    <div id="dropZone" onclick="document.getElementById('fileInput').click()"
-         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
-      <div class="placeholder">
-        <svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
-        <span>Drop photo here<br>or click to browse</span>
+<!-- Status -->
+<div class="card">
+  <div class="card-title">Status</div>
+  <div class="status-grid">
+    <div class="pill">
+      <div class="dot" id="dotServer"></div>
+      <div>
+        <div class="pill-label">Server</div>
+        <div class="pill-val" id="lblServer">—</div>
       </div>
-      <img id="facePreview" style="display:none">
-      <div id="faceBadge">✓ Face detected</div>
     </div>
-    <input type="file" id="fileInput" accept="image/*" onchange="onFileSelect(event)">
+    <div class="pill">
+      <div class="dot" id="dotFace"></div>
+      <div>
+        <div class="pill-label">Source face</div>
+        <div class="pill-val" id="lblFace">—</div>
+      </div>
+    </div>
   </div>
-
-  <div class="arrow">→</div>
-
-  <!-- Output panel -->
-  <div class="panel">
-    <div class="panel-label">Output (deepfake)</div>
-    <canvas id="outputCanvas" width="480" height="360"></canvas>
-  </div>
-
-  <!-- Cam preview (top-right corner style) -->
-  <div class="panel">
-    <div class="panel-label">Your cam</div>
-    <video id="localVideo" autoplay muted playsinline></video>
-  </div>
-
 </div>
 
-<!-- Controls -->
-<div class="controls">
-  <button id="btnStart">▶ Start</button>
-  <button id="btnStop"  disabled>■ Stop</button>
-  <button id="btnShare" disabled>📺 Use as Virtual Camera</button>
-  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer">
-    <input type="checkbox" id="chkEnhance" onchange="toggleSetting('enhance', this.checked)"
-      style="accent-color:#7c3aed;width:14px;height:14px">
-    Face Enhance (GFPGAN)
-  </label>
-  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer">
-    <input type="checkbox" id="chkColor" checked onchange="toggleSetting('color_correct', this.checked)"
-      style="accent-color:#7c3aed;width:14px;height:14px">
-    Color Correct
-  </label>
-  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;">
-    Mouth Mask
-    <input type="range" id="sliderMouth" min="0" max="2" step="0.05" value="1"
-      style="accent-color:#7c3aed;width:100px;"
-      oninput="updateMouthScale(this.value)">
-    <span id="mouthScaleVal" style="color:#a78bfa;min-width:28px;text-align:right">1.0</span>
-  </label>
-</div>
-
-<div class="server-row">
-  Server:
-  <input id="serverUrl" type="text" value="ws://localhost:8000/ws/deepfake">
-</div>
-
-<div class="status-row">
-  <span><span class="dot" id="dotWs"></span><span id="wsStatus">Disconnected</span></span>
-  <span><span class="dot" id="dotCam"></span><span id="camStatus">No camera</span></span>
-  <span><span class="dot" id="dotFace"></span><span id="faceStatus">No source face</span></span>
-</div>
-
-<div id="statsBar">fps: — &nbsp;|&nbsp; latency: — &nbsp;|&nbsp; frames: —</div>
-<div id="errBar"></div>
-
-<!-- Share overlay -->
-<div id="shareOverlay">
-  <div class="share-card">
-    <h2>📺 Use as Virtual Camera</h2>
-    <p>The deepfake output is now captured as a MediaStream. To use it in video calls:</p>
-    <p><strong>Option 1 — Share browser tab:</strong><br>In Zoom/Meet/Teams, choose "Share Screen" → select this browser tab.</p>
-    <p><strong>Option 2 — OBS Virtual Camera (best):</strong></p>
-    <code>1. Open OBS → Add Source → Browser Source
-2. URL: http://localhost:8000
-3. Start Virtual Camera in OBS
-4. In Zoom/Meet, select "OBS Virtual Camera"</code>
-    <p><strong>Option 3 — Linux v4l2loopback:</strong></p>
-    <code>ffmpeg -f x11grab -s 480x360 -r 25 \
-  -i :0.0+&lt;x&gt;,&lt;y&gt; \
-  -vf format=yuv420p \
-  -f v4l2 /dev/video10</code>
-    <button id="btnCloseShare" onclick="closeShare()">Close</button>
+<!-- Source face -->
+<div class="card">
+  <div class="card-title">Source face (swap target)</div>
+  <div id="dropZone"
+       onclick="document.getElementById('fileInput').click()"
+       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="#333"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+    <div class="hint">Drop photo here or click to browse</div>
+    <div id="faceName" class="face-name"></div>
+    <div id="faceBadge">✓ Face detected &amp; ready</div>
+    <div id="faceErr"></div>
   </div>
+  <input type="file" id="fileInput" accept="image/*" onchange="onFileSelect(event)">
+</div>
+
+<!-- Settings -->
+<div class="card">
+  <div class="card-title">Pipeline settings</div>
+
+  <div class="setting-row">
+    <span class="setting-label">Mouth mask size</span>
+    <div class="setting-right">
+      <input type="range" id="sliderMouth" min="0" max="2" step="0.05" value="0.15"
+             oninput="onMouthScale(this.value)">
+      <span class="range-val" id="mouthVal">0.15</span>
+    </div>
+  </div>
+
+  <div class="setting-row">
+    <span class="setting-label">Face Enhance (GFPGAN) <span style="color:#444;font-size:0.7rem">~80ms/frame</span></span>
+    <input type="checkbox" id="chkEnhance" onchange="postSetting('enhance', this.checked)">
+  </div>
+
+  <div class="setting-row">
+    <span class="setting-label">Color Correct</span>
+    <input type="checkbox" id="chkColor" onchange="postSetting('color_correct', this.checked)">
+  </div>
+</div>
+
+<!-- How to use -->
+<div class="tip">
+  <strong>How to use</strong><br>
+  1. Start server: <code>bash scripts/start_server.sh</code><br>
+  2. Upload a source face above.<br>
+  3. On Windows, run: <code>python viewer/viewer.py</code><br>
+  4. In OBS: <em>Add Source → Window Capture → "DeepFace Live"</em><br>
+  5. Set OBS Virtual Camera as source in Zoom / Meet / Teams.
 </div>
 
 <script>
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
-const TARGET_FPS      = 25;
-const FRAME_INTERVAL  = 1000 / TARGET_FPS;
-const JPEG_QUALITY    = 0.8;
-const CAP_W = 640, CAP_H = 480;
+const getBase = () => document.getElementById('serverUrl').value.replace(/\/$/, '');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// State
-// ─────────────────────────────────────────────────────────────────────────────
-let ws = null, localStream = null, captureTimer = null;
-let sourceReady = false;
-let stats = { sent: 0, received: 0, totalLat: 0, fps: 0 };
-let fpsCounter = { n: 0, last: performance.now() };
-
-const outputCanvas = document.getElementById('outputCanvas');
-const ctx2d        = outputCanvas.getContext('2d');
-const localVideo   = document.getElementById('localVideo');
-const btnStart     = document.getElementById('btnStart');
-const btnStop      = document.getElementById('btnStop');
-const btnShare     = document.getElementById('btnShare');
-
-// Offscreen capture canvas
-const capCanvas = document.createElement('canvas');
-capCanvas.width = CAP_W; capCanvas.height = CAP_H;
-const capCtx = capCanvas.getContext('2d');
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Source face upload
-// ─────────────────────────────────────────────────────────────────────────────
-function onDragOver(e) {
-  e.preventDefault();
-  document.getElementById('dropZone').classList.add('drag-over');
+// ── Health poll ───────────────────────────────────────────────────────────────
+let pollTimer = null;
+function scheduleHealthPoll() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(pollHealth, 600);
 }
-function onDragLeave(e) {
-  document.getElementById('dropZone').classList.remove('drag-over');
+
+async function pollHealth() {
+  try {
+    const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(3000) });
+    const d = await r.json();
+    setDot('dotServer', 'green'); document.getElementById('lblServer').textContent = 'Online';
+    if (d.source_face_set) {
+      setDot('dotFace', 'green'); document.getElementById('lblFace').textContent = 'Ready';
+    } else {
+      setDot('dotFace', 'yellow'); document.getElementById('lblFace').textContent = 'Not set';
+    }
+  } catch {
+    setDot('dotServer', 'red'); document.getElementById('lblServer').textContent = 'Offline';
+    setDot('dotFace', 'red');   document.getElementById('lblFace').textContent = '—';
+  }
+  pollTimer = setTimeout(pollHealth, 4000);
 }
+
+function setDot(id, cls) {
+  document.getElementById(id).className = 'dot ' + cls;
+}
+
+// ── Face upload ───────────────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropZone').classList.add('drag-over'); }
+function onDragLeave()  { document.getElementById('dropZone').classList.remove('drag-over'); }
 function onDrop(e) {
   e.preventDefault();
   document.getElementById('dropZone').classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) uploadFace(file);
+  const f = e.dataTransfer.files[0]; if (f) uploadFace(f);
 }
-function onFileSelect(e) {
-  const file = e.target.files[0];
-  if (file) uploadFace(file);
-}
+function onFileSelect(e) { const f = e.target.files[0]; if (f) uploadFace(f); }
 
 async function uploadFace(file) {
-  // Show preview immediately
-  const previewUrl = URL.createObjectURL(file);
-  const img = document.getElementById('facePreview');
-  img.src = previewUrl;
-  img.style.display = 'block';
-  document.querySelector('#dropZone .placeholder').style.display = 'none';
+  document.getElementById('faceName').textContent = file.name;
   document.getElementById('faceBadge').style.display = 'none';
-  setFaceStatus('Uploading…', 'yellow');
+  document.getElementById('faceErr').style.display = 'none';
 
   const form = new FormData();
   form.append('file', file);
-
   try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/api/source-face', {
-      method: 'POST', body: form,
-    });
-    const data = await resp.json();
-    if (resp.ok) {
+    const r = await fetch(getBase() + '/api/source-face', { method: 'POST', body: form });
+    const d = await r.json();
+    if (r.ok) {
       document.getElementById('faceBadge').style.display = 'block';
-      setFaceStatus('Face ready', 'green');
-      sourceReady = true;
+      setDot('dotFace', 'green'); document.getElementById('lblFace').textContent = 'Ready';
     } else {
-      setFaceStatus(data.error || 'Upload failed', 'red');
-      logErr(data.error || 'Face upload failed');
+      showFaceErr(d.error || 'Upload failed');
     }
-  } catch (e) {
-    setFaceStatus('Upload error', 'red');
-    logErr('Upload: ' + e.message);
-  }
+  } catch (e) { showFaceErr(e.message); }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WebSocket
-// ─────────────────────────────────────────────────────────────────────────────
-function connectWs(url) {
-  ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-
-  ws.onopen  = () => { setWsStatus('Connected', 'green'); btnShare.disabled = false; };
-  ws.onclose = () => { setWsStatus('Disconnected', 'red'); btnShare.disabled = true; };
-  ws.onerror = () => setWsStatus('Error', 'red');
-
-  ws.onmessage = (ev) => {
-    const jpegData = new Uint8Array(ev.data);
-
-    // Verify JPEG magic
-    if (jpegData[0] !== 0xFF || jpegData[1] !== 0xD8) {
-      logErr('bad JPEG magic'); return;
-    }
-
-    const blob = new Blob([jpegData], { type: 'image/jpeg' });
-    createImageBitmap(blob).then(bmp => {
-      outputCanvas.width  = bmp.width;
-      outputCanvas.height = bmp.height;
-      ctx2d.drawImage(bmp, 0, 0);
-      bmp.close();
-      stats.received++;
-
-      fpsCounter.n++;
-      const now = performance.now();
-      if (now - fpsCounter.last >= 1000) {
-        stats.fps = fpsCounter.n;
-        fpsCounter.n = 0;
-        fpsCounter.last = now;
-      }
-      updateStats();
-    }).catch(e => logErr('decode: ' + e.message));
-  };
+function showFaceErr(msg) {
+  const el = document.getElementById('faceErr');
+  el.textContent = msg; el.style.display = 'block';
+  setDot('dotFace', 'red'); document.getElementById('lblFace').textContent = 'Error';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Capture
-// ─────────────────────────────────────────────────────────────────────────────
-async function startCapture() {
-  localStream = await navigator.mediaDevices.getUserMedia({
-    video: { width: CAP_W, height: CAP_H, frameRate: TARGET_FPS },
-    audio: false,
-  });
-  localVideo.srcObject = localStream;
-  setCamStatus('Active', 'green');
-  captureTimer = setInterval(sendFrame, FRAME_INTERVAL);
+// ── Settings ──────────────────────────────────────────────────────────────────
+let mouthDebounce = null;
+function onMouthScale(v) {
+  document.getElementById('mouthVal').textContent = parseFloat(v).toFixed(2);
+  clearTimeout(mouthDebounce);
+  mouthDebounce = setTimeout(() => postSetting('mouth_scale', parseFloat(v)), 150);
 }
 
-function stopCapture() {
-  if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
-  if (localStream)  { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-  localVideo.srcObject = null;
-  setCamStatus('Stopped', 'yellow');
-}
-
-function sendFrame() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (!localVideo || localVideo.readyState < 2) return;
-
-  capCtx.drawImage(localVideo, 0, 0, CAP_W, CAP_H);
-  capCanvas.toBlob(blob => {
-    if (!blob) return;
-    blob.arrayBuffer().then(buf => {
-      ws.send(buf);
-      stats.sent++;
-    }).catch(e => logErr('arrayBuffer: ' + e.message));
-  }, 'image/jpeg', JPEG_QUALITY);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Virtual camera share
-// ─────────────────────────────────────────────────────────────────────────────
-function openShare() {
-  document.getElementById('shareOverlay').classList.add('show');
-}
-function closeShare() {
-  document.getElementById('shareOverlay').classList.remove('show');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Button handlers
-// ─────────────────────────────────────────────────────────────────────────────
-btnStart.onclick = async () => {
-  btnStart.disabled = true;
+async function postSetting(key, val) {
   try {
-    const url = document.getElementById('serverUrl').value.trim();
-    connectWs(url);
-    await startCapture();
-    btnStop.disabled = false;
-  } catch (e) {
-    logErr(e.message);
-    btnStart.disabled = false;
-  }
-};
-
-btnStop.onclick = () => {
-  stopCapture();
-  if (ws) { ws.close(); ws = null; }
-  btnStart.disabled = false;
-  btnStop.disabled  = true;
-  stats = { sent:0, received:0, totalLat:0, fps:0 };
-  updateStats();
-};
-
-btnShare.onclick = openShare;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UI helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function setWsStatus(t, c)   { wsStatusEl.textContent = t; dotWs.className = 'dot ' + c; }
-function setCamStatus(t, c)  { camStatusEl.textContent = t; dotCam.className = 'dot ' + c; }
-function setFaceStatus(t, c) { faceStatusEl.textContent = t; dotFace.className = 'dot ' + c; }
-function logErr(msg) {
-  console.error('[deepface]', msg);
-  document.getElementById('errBar').textContent = msg;
-}
-function updateStats() {
-  document.getElementById('statsBar').textContent =
-    `fps: ${stats.fps}  |  frames sent: ${stats.sent}  |  received: ${stats.received}`;
-}
-
-const wsStatusEl   = document.getElementById('wsStatus');
-const camStatusEl  = document.getElementById('camStatus');
-const faceStatusEl = document.getElementById('faceStatus');
-const dotWs        = document.getElementById('dotWs');
-const dotCam       = document.getElementById('dotCam');
-const dotFace      = document.getElementById('dotFace');
-
-async function updateMouthScale(val) {
-  document.getElementById('mouthScaleVal').textContent = parseFloat(val).toFixed(2);
-  await toggleSetting('mouth_scale', parseFloat(val));
-}
-
-async function toggleSetting(key, val) {
-  try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/api/settings', {
+    await fetch(getBase() + '/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: val }),
     });
-    const data = await resp.json();
-    if (data.error) logErr(data.error);
-    else document.getElementById('errBar').textContent =
-      `enhance=${data.enhance}  color_correct=${data.color_correct}`;
-  } catch(e) { logErr('settings: ' + e.message); }
+  } catch(e) { console.warn('settings:', e.message); }
 }
 
-// Fetch pre-loaded face status on load
-(async () => {
-  try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/health');
-    const data = await resp.json();
-    if (data.source_face_set) {
-      setFaceStatus('Face ready (pre-loaded)', 'green');
-      sourceReady = true;
-      document.querySelector('#dropZone .placeholder span').textContent = 'Face pre-loaded — click to change';
-    }
-  } catch(_) {}
-})();
+// ── Init ──────────────────────────────────────────────────────────────────────
+pollHealth();
 </script>
 </body>
 </html>
