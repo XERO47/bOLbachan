@@ -420,6 +420,7 @@ function connectWs(url) {
   ws.onerror = () => setWsStatus('Error', 'red');
 
   ws.onmessage = (ev) => {
+    _waitingForReply = false;  // ready to send next frame
     const jpegData = new Uint8Array(ev.data);
 
     // Verify JPEG magic
@@ -470,7 +471,6 @@ function stopCapture() {
 function sendFrame() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (!localVideo || localVideo.readyState < 2) return;
-
   capCtx.drawImage(localVideo, 0, 0, CAP_W, CAP_H);
   capCanvas.toBlob(blob => {
     if (!blob) return;
