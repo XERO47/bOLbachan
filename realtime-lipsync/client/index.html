@@ -281,6 +281,13 @@ button:disabled { opacity: 0.35; cursor: default; }
       style="accent-color:#7c3aed;width:14px;height:14px">
     Color Correct
   </label>
+  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;">
+    Mouth Mask
+    <input type="range" id="sliderMouth" min="0" max="2" step="0.05" value="1"
+      style="accent-color:#7c3aed;width:100px;"
+      oninput="updateMouthScale(this.value)">
+    <span id="mouthScaleVal" style="color:#a78bfa;min-width:28px;text-align:right">1.0</span>
+  </label>
 </div>
 
 <div class="server-row">
@@ -532,6 +539,11 @@ const faceStatusEl = document.getElementById('faceStatus');
 const dotWs        = document.getElementById('dotWs');
 const dotCam       = document.getElementById('dotCam');
 const dotFace      = document.getElementById('dotFace');
+
+async function updateMouthScale(val) {
+  document.getElementById('mouthScaleVal').textContent = parseFloat(val).toFixed(2);
+  await toggleSetting('mouth_scale', parseFloat(val));
+}
 
 async function toggleSetting(key, val) {
   try {

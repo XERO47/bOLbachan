@@ -107,11 +107,14 @@ async def update_settings(body: dict):
         _pipeline._use_enhance = val and _pipeline.enhancer is not None
     if "color_correct" in body:
         _pipeline._use_color = bool(body["color_correct"])
-    logger.info("Settings updated  enhance=%s  color=%s",
-                _pipeline._use_enhance, _pipeline._use_color)
+    if "mouth_scale" in body:
+        _pipeline.mouth_scale = max(0.0, min(3.0, float(body["mouth_scale"])))
+    logger.info("Settings updated  enhance=%s  color=%s  mouth_scale=%.2f",
+                _pipeline._use_enhance, _pipeline._use_color, _pipeline.mouth_scale)
     return {
         "enhance": _pipeline._use_enhance,
         "color_correct": _pipeline._use_color,
+        "mouth_scale": _pipeline.mouth_scale,
     }
 
 

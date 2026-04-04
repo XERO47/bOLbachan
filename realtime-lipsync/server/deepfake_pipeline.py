@@ -45,13 +45,14 @@ def _face_mask_106(shape, lm106: np.ndarray) -> np.ndarray:
     return cv2.GaussianBlur(mask, (31, 31), 11)
 
 
-def _mouth_mask(shape, kps: np.ndarray) -> np.ndarray:
+def _mouth_mask(shape, kps: np.ndarray, scale: float = 1.0) -> np.ndarray:
     """
     Soft ellipse over the mouth + chin region, derived from the 5-point kps:
       kps[2] = nose tip  (top boundary of mouth region)
       kps[3] = left mouth corner
       kps[4] = right mouth corner
 
+    scale: multiplier for the ellipse radii (0 = no cutout, 1 = default, 2 = large)
     Returns mask where 255 = show original live mouth, 0 = show swap.
     """
     h, w = shape[:2]
@@ -65,12 +66,15 @@ def _mouth_mask(shape, kps: np.ndarray) -> np.ndarray:
     cy = int((lm_corner[1] + rm_corner[1]) / 2)
 
     # Horizontal radius: slightly wider than mouth corner span
-    rx = int(np.linalg.norm(rm_corner - lm_corner) * 0.75)
+    rx = int(np.linalg.norm(rm_corner - lm_corner) * 0.75 * scale)
 
     # Vertical radius: from above mouth corners down to estimated chin
     # chin ≈ mouth_y + (mouth_y − nose_y) * 0.9
     chin_y  = cy + int((cy - nose[1]) * 0.9)
-    ry = max(rx // 2, (chin_y - cy))
+    ry = max(rx // 2, int((chin_y - cy) * scale))
+
+    if rx <= 0 or ry <= 0:
+        return np.zeros((h, w), dtype=np.uint8)
 
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
@@ -109,6 +113,7 @@ class DeepFakePipeline:
         self._source_face  = None
         self._cached_faces = None
         self._missed       = 0
+        self.mouth_scale   = 1.0   # tunable: 0=no cutout, 1=default, 2=large
         logger.info("DeepFakePipeline ready")
 
     def set_source(self, image_bgr: np.ndarray) -> str:
@@ -158,8 +163,8 @@ class DeepFakePipeline:
 
             # Layer 2: cut mouth hole — show real live lips on top
             kps = getattr(ref, "kps", None)
-            if kps is not None and len(kps) >= 5:
-                mm = _mouth_mask(frame_bgr.shape, kps)
+            if kps is not None and len(kps) >= 5 and self.mouth_scale > 0:
+                mm = _mouth_mask(frame_bgr.shape, kps, self.mouth_scale)
                 result = _blend(frame_bgr, result, mm)
 
             return result
