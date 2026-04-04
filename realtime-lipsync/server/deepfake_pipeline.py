@@ -131,13 +131,26 @@ class DeepFakePipeline:
     def __init__(self):
         import insightface
 
-        self.face_app = insightface.app.FaceAnalysis(
+        # Full analyzer: runs detection + 2D landmarks + 3D landmarks +
+        # gender/age + recognition. Only needed to extract source face embedding.
+        self._full_app = insightface.app.FaceAnalysis(
             name="buffalo_l",
             root=str(_PROJECT_DIR),
             providers=_ORT_PROVIDERS,
         )
-        self.face_app.prepare(ctx_id=0, det_size=(640, 640))
-        logger.info("InsightFace FaceAnalysis ready")
+        self._full_app.prepare(ctx_id=0, det_size=(640, 640))
+
+        # Fast detector: detection only → gives bbox + 5-point kps.
+        # Inswapper only needs kps from the live frame + embedding from source.
+        # Skipping recognition/3D-landmarks/gender saves ~40ms per frame.
+        self.face_app = insightface.app.FaceAnalysis(
+            name="buffalo_l",
+            root=str(_PROJECT_DIR),
+            allowed_modules=["detection"],
+            providers=_ORT_PROVIDERS,
+        )
+        self.face_app.prepare(ctx_id=0, det_size=(320, 320))
+        logger.info("InsightFace ready (full + fast-detect)")
 
         if not INSWAPPER_CKPT.exists():
             raise FileNotFoundError(f"inswapper_128.onnx not found at {INSWAPPER_CKPT}")
@@ -186,7 +199,8 @@ class DeepFakePipeline:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_source(self, image_bgr: np.ndarray) -> str:
-        faces = self.face_app.get(image_bgr)
+        # Use full analyzer for source — we need the embedding here
+        faces = self._full_app.get(image_bgr)
         if not faces:
             return "no_face"
         faces.sort(key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)
