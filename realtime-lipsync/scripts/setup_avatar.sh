@@ -45,10 +45,16 @@ fi
 # ── 4. Download wav2lip_gan.pth ──────────────────────────────────────────────
 WAV2LIP_CKPT="$MODELS_DIR/wav2lip_gan.pth"
 if [ ! -f "$WAV2LIP_CKPT" ]; then
-  echo "==> Downloading wav2lip_gan.pth (~420MB)..."
-  # Use gdown if available, else wget from a known source
-  pip install -q gdown
-  gdown "https://drive.google.com/uc?id=1j4dD1zCYfexpKd3bMGjROGKRGllJIwPN" -O "$WAV2LIP_CKPT"
+  echo "==> Downloading wav2lip_gan.pth (~420MB) from HuggingFace..."
+  pip install -q huggingface_hub
+  python3 -c "
+import shutil, os
+from huggingface_hub import hf_hub_download
+path = hf_hub_download(repo_id='numz/wav2lip', filename='wav2lip_gan.pth', cache_dir='/tmp/hf_cache')
+os.makedirs('$MODELS_DIR', exist_ok=True)
+shutil.copy(path, '$WAV2LIP_CKPT')
+print('Saved to $WAV2LIP_CKPT')
+"
 else
   echo "==> wav2lip_gan.pth already present."
 fi
@@ -56,17 +62,14 @@ fi
 # ── 5. Download inswapper_128.onnx ──────────────────────────────────────────
 INSWAPPER_CKPT="$MODELS_DIR/inswapper_128.onnx"
 if [ ! -f "$INSWAPPER_CKPT" ]; then
-  echo "==> Downloading inswapper_128.onnx (~560MB)..."
-  # InsightFace model zoo
-  pip install -q huggingface_hub
+  echo "==> Downloading inswapper_128.onnx (~560MB) from HuggingFace..."
   python3 -c "
+import shutil, os
 from huggingface_hub import hf_hub_download
-path = hf_hub_download(
-    repo_id='ezioruan/inswapper_128.onnx',
-    filename='inswapper_128.onnx',
-    local_dir='$MODELS_DIR',
-)
-print('Downloaded to', path)
+path = hf_hub_download(repo_id='ezioruan/inswapper_128.onnx', filename='inswapper_128.onnx', cache_dir='/tmp/hf_cache')
+os.makedirs('$MODELS_DIR', exist_ok=True)
+shutil.copy(path, '$INSWAPPER_CKPT')
+print('Saved to $INSWAPPER_CKPT')
 "
 else
   echo "==> inswapper_128.onnx already present."
