@@ -1,20 +1,23 @@
 """
 Real-time DeepFace pipeline — InsightFace inswapper_128.
 
-Kept lean so inswapper runs at full GPU speed (~30ms, 25fps+).
+DeepFaceLive-style face mask:
+  After the swap, use the 106 facial landmarks to build a precise
+  face-polygon mask, then alpha-blend the swap result onto the original
+  frame.  This gives a natural face-shaped boundary with soft edges —
+  no hard rectangular paste, no visible seam around the mouth/chin.
 
-The only extra logic:
-  - Face cache: if detection drops a frame, reuse the last known face
-    object so the swap holds instead of snapping back to raw webcam.
-    This is what makes lips look "connected" — no flicker on missed frames.
-  - EMA on bbox only (for the _visual_ display, not the swap alignment).
-    The swap itself always uses the real detected kps so lips track exactly.
+  The mask is feathered with a small kernel (fast) so it adds ~2ms
+  while keeping the output at 25fps+.
+
+Face cache:
+  If detection drops a frame (side angle, occlusion) the last known
+  face is reused so the swap holds instead of snapping to raw webcam.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import cv2
@@ -23,15 +26,45 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _PROJECT_DIR   = Path(__file__).parent.parent.resolve()
-_MODELS_DIR    = _PROJECT_DIR / "models"
-INSWAPPER_CKPT = _MODELS_DIR / "inswapper_128.onnx"
-
+INSWAPPER_CKPT = _PROJECT_DIR / "models" / "inswapper_128.onnx"
 _ORT_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+_MAX_CACHE     = 5   # max frames to reuse cached face when detection drops
 
-# How many consecutive missed-detection frames to keep using the cached face
-# before giving up and showing the raw frame
-_MAX_CACHE_FRAMES = 5
 
+# ── Face mask from 106 landmarks ─────────────────────────────────────────────
+
+def _face_mask_106(shape, landmark_2d_106: np.ndarray) -> np.ndarray:
+    """
+    Build a soft face polygon mask from InsightFace 106 2D landmarks.
+
+    The convex hull of all 106 points tightly wraps the face including
+    the chin, cheeks, and forehead.  We feather the edges with a small
+    GaussianBlur so the blend fades naturally into the neck/hair.
+
+    Returns uint8 mask (0-255), same H×W as `shape`.
+    """
+    h, w = shape[:2]
+    pts = landmark_2d_106.astype(np.int32)
+
+    # Convex hull of all 106 points → precise face boundary
+    hull = cv2.convexHull(pts)
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, hull, 255)
+
+    # Small feather — 31px is fast and gives a smooth edge
+    mask = cv2.GaussianBlur(mask, (31, 31), 11)
+    return mask
+
+
+def _blend(swapped: np.ndarray, original: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Alpha-blend swapped frame onto original using the face mask."""
+    a = mask[:, :, None].astype(np.float32) / 255.0
+    return (swapped.astype(np.float32) * a +
+            original.astype(np.float32) * (1.0 - a)).astype(np.uint8)
+
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
 
 class DeepFakePipeline:
 
@@ -53,10 +86,9 @@ class DeepFakePipeline:
         )
         logger.info("Inswapper ready")
 
-        self._source_face  = None   # InsightFace Face object for the avatar
-        self._cached_faces = None   # last successfully detected live faces
-        self._missed       = 0      # consecutive frames with no detection
-
+        self._source_face  = None
+        self._cached_faces = None
+        self._missed       = 0
         logger.info("DeepFakePipeline ready")
 
     def set_source(self, image_bgr: np.ndarray) -> str:
@@ -77,7 +109,6 @@ class DeepFakePipeline:
         live_faces = self.face_app.get(frame_bgr)
 
         if live_faces:
-            # Sort largest face first
             live_faces.sort(
                 key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]),
                 reverse=True,
@@ -86,13 +117,23 @@ class DeepFakePipeline:
             self._missed = 0
         else:
             self._missed += 1
-            if self._missed > _MAX_CACHE_FRAMES or self._cached_faces is None:
-                # Too many misses — show raw frame rather than a stale swap
+            if self._missed > _MAX_CACHE or self._cached_faces is None:
                 return frame_bgr
-            # Reuse last known face positions so the swap holds on this frame
             live_faces = self._cached_faces
 
-        result = frame_bgr.copy()
+        # ── Inswapper ────────────────────────────────────────────────────────
+        swapped = frame_bgr.copy()
         for face in live_faces:
-            result = self.swapper.get(result, face, self._source_face, paste_back=True)
-        return result
+            swapped = self.swapper.get(swapped, face, self._source_face, paste_back=True)
+
+        # ── 106-landmark face mask → natural blend ────────────────────────────
+        # Use the primary (largest) face's landmarks for the mask.
+        # If landmarks aren't available (shouldn't happen with buffalo_l), fall back.
+        ref = live_faces[0]
+        lm = getattr(ref, "landmark_2d_106", None)
+        if lm is not None:
+            mask = _face_mask_106(frame_bgr.shape, lm)
+            return _blend(swapped, frame_bgr, mask)
+
+        # Fallback: return raw inswapper result
+        return swapped
