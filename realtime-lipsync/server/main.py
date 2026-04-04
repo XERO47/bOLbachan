@@ -1,93 +1,71 @@
 """
-Real-time lip sync WebSocket server.
+Real-time DeepFace WebSocket server.
 
-Binary wire protocol (client → server):
-  [4B msg_type][4B audio_size][4B video_size][8B timestamp_ms]
-  [audio_size bytes PCM int16][video_size bytes JPEG]
+Wire protocol (client → server):  raw JPEG bytes
+Wire protocol (server → client):  raw JPEG bytes
 
-Binary wire protocol (server → client):
-  [4B msg_type][4B video_size][8B timestamp_ms][4B latency_ms]
-  [video_size bytes JPEG]
+REST:
+  GET  /                      → index.html
+  GET  /health
+  POST /api/source-face       → multipart image upload, sets swap target
 """
 
 import asyncio
+import io
 import logging
 import os
-import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict
-
-# Resolve paths relative to this file so it works both in Docker (/app) and bare metal
-_SERVER_DIR = Path(__file__).parent.resolve()
-_PROJECT_DIR = _SERVER_DIR.parent
-_CLIENT_DIR = Path(os.environ.get("CLIENT_DIR", str(_PROJECT_DIR / "client")))
 
 import cv2
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import settings
-from frame_buffer import FrameAudioBuffer
-from pipeline import LipSyncPipeline
-from avatar_pipeline import AvatarPipeline
+from deepfake_pipeline import DeepFakePipeline
 
+_SERVER_DIR = Path(__file__).parent.resolve()
+_PROJECT_DIR = _SERVER_DIR.parent
+_CLIENT_DIR = Path(os.environ.get("CLIENT_DIR", str(_PROJECT_DIR / "client")))
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "info")
 logging.basicConfig(
-    level=settings.LOG_LEVEL.upper(),
+    level=LOG_LEVEL.upper(),
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Real-time Lip Sync", version="1.0.0")
+app = FastAPI(title="DeepFace Live")
 app.mount("/static", StaticFiles(directory=str(_CLIENT_DIR)), name="static")
 
-# Global pipeline (loaded once at startup)
-_pipeline: LipSyncPipeline | AvatarPipeline | None = None
-# Thread pool for running blocking inference without blocking asyncio
+_pipeline: DeepFakePipeline | None = None
 _executor = ThreadPoolExecutor(max_workers=2)
-# Active connections counter
-_active_connections: int = 0
+_active: int = 0
 
-MSG_FRAME = b"FRAME"[:4]
-MSG_CTRL  = b"CTRL"
+MAX_CONNECTIONS = int(os.environ.get("MAX_CONNECTIONS", "5"))
+JPEG_QUALITY    = int(os.environ.get("JPEG_QUALITY", "85"))
+TARGET_FPS      = int(os.environ.get("TARGET_FPS", "25"))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Lifecycle
-# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup():
     global _pipeline
     loop = asyncio.get_event_loop()
+    logger.info("Loading DeepFakePipeline…")
+    _pipeline = await loop.run_in_executor(_executor, DeepFakePipeline)
 
-    if settings.MODEL_TYPE == "avatar":
-        logger.info("Loading AvatarPipeline (InsightFace + Wav2Lip) …")
-        _pipeline = await loop.run_in_executor(
-            _executor,
-            lambda: AvatarPipeline(
-                avatar_image_path=settings.AVATAR_IMAGE,
-                device_str=settings.DEVICE,
-            )
-        )
-        await loop.run_in_executor(_executor, _pipeline.warmup)
-    else:
-        logger.info("Loading LipSyncPipeline (%s) …", settings.MODEL_TYPE)
-        _pipeline = await loop.run_in_executor(
-            _executor,
-            lambda: LipSyncPipeline(
-                model_type=settings.MODEL_TYPE,
-                model_dir=settings.MODEL_DIR,
-                device=settings.DEVICE,
-                half=settings.HALF_PRECISION,
-                face_det_interval=settings.FACE_DET_INTERVAL,
-                target_face_size=256,
-            )
-        )
-        await loop.run_in_executor(_executor, _pipeline.warmup)
+    # Auto-load source face if set via env var
+    src = os.environ.get("SOURCE_FACE", "")
+    if src and Path(src).exists():
+        img = cv2.imread(src)
+        if img is not None:
+            status = await loop.run_in_executor(_executor, _pipeline.set_source, img)
+            logger.info("Source face pre-loaded from %s: %s", src, status)
 
     logger.info("Server ready.")
 
@@ -97,25 +75,14 @@ async def shutdown():
     _executor.shutdown(wait=False)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Health + info
-# ──────────────────────────────────────────────────────────────────────────────
+# ── REST ──────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "pipeline_ready": _pipeline is not None}
-
-
-@app.get("/info")
-async def info():
-    import torch
     return {
-        "model": settings.MODEL_TYPE,
-        "device": settings.DEVICE,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-        "fp16": settings.HALF_PRECISION,
-        "target_fps": settings.TARGET_FPS,
-        "active_connections": _active_connections,
+        "status": "ok",
+        "pipeline_ready": _pipeline is not None,
+        "source_face_set": _pipeline is not None and _pipeline._source_face is not None,
     }
 
 
@@ -125,137 +92,109 @@ async def index():
         return HTMLResponse(f.read())
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# WebSocket endpoint
-# ──────────────────────────────────────────────────────────────────────────────
+@app.post("/api/source-face")
+async def set_source_face(file: UploadFile = File(...)):
+    """
+    Upload a photo — the server detects the face and stores it as the swap target.
+    Accepts image/jpeg, image/png, etc.
+    """
+    if _pipeline is None:
+        return JSONResponse({"error": "pipeline not ready"}, status_code=503)
 
-@app.websocket("/ws/lipsync")
-async def ws_lipsync(ws: WebSocket):
-    global _active_connections
+    data = await file.read()
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return JSONResponse({"error": "cannot decode image"}, status_code=400)
 
-    if _active_connections >= settings.MAX_CONNECTIONS:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(_executor, _pipeline.set_source, img)
+
+    if result == "no_face":
+        return JSONResponse({"error": "no face detected in uploaded image"}, status_code=422)
+
+    bbox = _pipeline._source_face.bbox.astype(int).tolist()
+    logger.info("Source face updated via /api/source-face  bbox=%s", bbox)
+    return {"status": "ok", "bbox": bbox}
+
+
+# ── WebSocket ─────────────────────────────────────────────────────────────────
+
+@app.websocket("/ws/deepfake")
+async def ws_deepfake(ws: WebSocket):
+    global _active
+
+    if _active >= MAX_CONNECTIONS:
+        await ws.close(code=1008)
         return
 
     await ws.accept()
-    _active_connections += 1
-    client = ws.client
-    logger.info("Client connected: %s (total=%d)", client, _active_connections)
+    _active += 1
+    logger.info("Client connected  total=%d", _active)
 
-    buffer = FrameAudioBuffer(
-        target_fps=settings.TARGET_FPS,
-        audio_sample_rate=settings.AUDIO_SAMPLE_RATE,
-        audio_context_ms=200,
-    )
-
-    stats = {"frames_in": 0, "frames_out": 0, "total_latency_ms": 0.0}
-    _inference_running = False
+    frames_in = frames_out = 0
+    total_lat = 0.0
+    running = False
 
     try:
         while True:
-            raw = await ws.receive_bytes()
-            recv_time_ms = int(time.time() * 1000)
+            jpeg_bytes = await ws.receive_bytes()
+            recv_ms = time.time() * 1000
 
-            # ── Parse header ──────────────────────────────────────────────────
-            # [4B type][4B audio_sz][4B video_sz][4B ts_hi][4B ts_lo]
-            if len(raw) < 20:
+            # Decode JPEG
+            arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+            frames_in += 1
+
+            # Skip if previous inference still in flight
+            if running:
                 continue
 
-            audio_sz  = struct.unpack_from(">I", raw, 4)[0]
-            video_sz  = struct.unpack_from(">I", raw, 8)[0]
-            ts_hi, ts_lo = struct.unpack_from(">II", raw, 12)
-            ts_ms     = ts_hi * 0x100000000 + ts_lo
-
-            if len(raw) < 20 + audio_sz + video_sz:
-                logger.warning("Short message, skipping")
+            running = True
+            loop = asyncio.get_event_loop()
+            try:
+                processed = await loop.run_in_executor(
+                    _executor, _pipeline.process, frame
+                )
+            except Exception as e:
+                logger.exception("Inference error: %s", e)
+                running = False
                 continue
+            finally:
+                running = False
 
-            audio_bytes = raw[20 : 20 + audio_sz]
-            video_bytes = raw[20 + audio_sz : 20 + audio_sz + video_sz]
-            stats["frames_in"] += 1
-
-            # ── Decode audio (int16 PCM → float32) ───────────────────────────
-            if audio_sz > 0:
-                pcm_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
-                pcm_float = pcm_int16.astype(np.float32) / 32768.0
-                await buffer.add_audio(pcm_float, ts_ms)
-
-            # ── Decode video (JPEG → BGR) ─────────────────────────────────────
-            if video_sz > 0:
-                jpg_arr = np.frombuffer(video_bytes, dtype=np.uint8)
-                frame = cv2.imdecode(jpg_arr, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    await buffer.add_video(frame, ts_ms)
-
-            # ── Skip if previous inference still running (avoid queue buildup) ─
-            if _inference_running:
-                continue
-
-            pair = await buffer.get_aligned_pair()
-            if pair is None:
-                continue
-
-            frame_bgr, audio_pcm = pair
-
-            # ── DEBUG: echo raw input frame back (bypass inference) ───────────
-            import os
-            if os.environ.get("ECHO_MODE") == "1":
-                processed = frame_bgr
-            else:
-                _inference_running = True
-                loop = asyncio.get_event_loop()
-                try:
-                    processed = await loop.run_in_executor(
-                        _executor, _pipeline.process, frame_bgr, audio_pcm
-                    )
-                except Exception as infer_err:
-                    logger.exception("Inference error: %s", infer_err)
-                    _inference_running = False
-                    continue
-                finally:
-                    _inference_running = False
-
-            # ── Encode and send ───────────────────────────────────────────────
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.JPEG_QUALITY]
-            ok, jpg = cv2.imencode(".jpg", processed, encode_params)
+            # Encode and send
+            ok, jpg = cv2.imencode(
+                ".jpg", processed,
+                [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+            )
             if not ok:
                 continue
 
-            out_bytes = jpg.tobytes()
-            latency_ms = int(time.time() * 1000) - recv_time_ms
-            stats["frames_out"] += 1
-            stats["total_latency_ms"] += latency_ms
-
-            # [4B "FRME"][4B video_sz][8B ts_ms][4B latency_ms][video bytes]
-            header = struct.pack(">4sIQI", b"FRME", len(out_bytes), ts_ms, latency_ms)
-            await ws.send_bytes(header + out_bytes)
+            await ws.send_bytes(jpg.tobytes())
+            frames_out += 1
+            total_lat += time.time() * 1000 - recv_ms
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
         logger.exception("WS error: %s", e)
     finally:
-        _active_connections -= 1
-        avg_lat = (
-            stats["total_latency_ms"] / stats["frames_out"]
-            if stats["frames_out"] > 0 else 0
-        )
-        logger.info(
-            "Client disconnected: %s | in=%d out=%d avg_latency=%.0fms",
-            client, stats["frames_in"], stats["frames_out"], avg_lat,
-        )
+        _active -= 1
+        avg = total_lat / frames_out if frames_out else 0
+        logger.info("Disconnected  in=%d out=%d avg_lat=%.0fms", frames_in, frames_out, avg)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Entry ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("PORT", 8000)),
         ws_ping_interval=20,
         ws_ping_timeout=20,
-        log_level=settings.LOG_LEVEL,
+        log_level=LOG_LEVEL,
     )

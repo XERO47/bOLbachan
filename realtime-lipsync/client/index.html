@@ -3,124 +3,393 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Real-time Lip Sync</title>
+<title>DeepFace Live</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: #0f0f0f; color: #e0e0e0;
-    font-family: 'Segoe UI', sans-serif;
-    display: flex; flex-direction: column;
-    align-items: center; padding: 24px; gap: 16px;
-  }
-  h1 { font-size: 1.4rem; color: #a78bfa; }
-  .video-row {
-    display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
-  }
-  .video-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .video-box label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-  video, canvas {
-    width: 480px; height: 360px;
-    border-radius: 8px; background: #1a1a1a;
-    border: 1px solid #333;
-  }
-  .controls {
-    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;
-  }
-  button {
-    padding: 10px 22px; border: none; border-radius: 6px;
-    font-size: 0.9rem; cursor: pointer; transition: opacity 0.15s;
-  }
-  button:disabled { opacity: 0.4; cursor: default; }
-  #btnStart  { background: #7c3aed; color: #fff; }
-  #btnStop   { background: #dc2626; color: #fff; }
-  #btnVcam   { background: #059669; color: #fff; }
-  .status-bar {
-    display: flex; gap: 24px; font-size: 0.8rem; color: #666;
-  }
-  .dot {
-    display: inline-block; width: 8px; height: 8px;
-    border-radius: 50%; margin-right: 5px; background: #555;
-  }
-  .dot.green { background: #22c55e; }
-  .dot.red   { background: #ef4444; }
-  .dot.yellow { background: #eab308; }
-  #statsBar { font-size: 0.75rem; color: #555; font-variant-numeric: tabular-nums; }
-  #errBar   { font-size: 0.75rem; color: #ef4444; min-height: 1.2em; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d0d0d;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  gap: 18px;
+}
+
+h1 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #a78bfa;
+  letter-spacing: 1px;
+}
+
+/* ── Main layout: source | arrow | output ── */
+.stage {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-label {
+  font-size: 0.7rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Source face drop zone */
+#dropZone {
+  width: 240px;
+  height: 240px;
+  border: 2px dashed #444;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  position: relative;
+  overflow: hidden;
+  background: #1a1a1a;
+}
+#dropZone:hover, #dropZone.drag-over {
+  border-color: #7c3aed;
+  background: #1e1a2e;
+}
+#dropZone img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 10px;
+}
+#dropZone .placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #555;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+#dropZone .placeholder svg {
+  width: 40px; height: 40px; fill: #444;
+}
+#faceBadge {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #22c55e;
+  color: #000;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  display: none;
+}
+#fileInput { display: none; }
+
+/* Arrow */
+.arrow {
+  font-size: 2rem;
+  color: #444;
+}
+
+/* Output canvas */
+#outputCanvas {
+  width: 480px;
+  height: 360px;
+  background: #111;
+  border-radius: 10px;
+  border: 1px solid #2a2a2a;
+  display: block;
+}
+
+/* Small cam preview */
+#localVideo {
+  width: 160px;
+  height: 120px;
+  border-radius: 8px;
+  background: #111;
+  border: 1px solid #222;
+  object-fit: cover;
+}
+
+/* Controls */
+.controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button {
+  padding: 9px 20px;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+button:active { transform: scale(0.97); }
+button:disabled { opacity: 0.35; cursor: default; }
+
+#btnStart  { background: #7c3aed; color: #fff; }
+#btnStop   { background: #dc2626; color: #fff; }
+#btnShare  { background: #0284c7; color: #fff; }
+
+/* Status row */
+.status-row {
+  display: flex;
+  gap: 20px;
+  font-size: 0.75rem;
+  color: #555;
+  align-items: center;
+}
+.dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  background: #333;
+}
+.dot.green  { background: #22c55e; }
+.dot.red    { background: #ef4444; }
+.dot.yellow { background: #eab308; }
+
+#statsBar { font-size: 0.72rem; color: #555; font-variant-numeric: tabular-nums; }
+#errBar   { font-size: 0.72rem; color: #ef4444; min-height: 1em; }
+
+/* Server URL */
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #555;
+}
+.server-row input {
+  background: #1a1a1a;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 4px 8px;
+  width: 260px;
+  font-size: 0.8rem;
+}
+
+/* Share overlay */
+#shareOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+#shareOverlay.show { display: flex; }
+.share-card {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 28px 32px;
+  max-width: 420px;
+  width: 90%;
+}
+.share-card h2 { font-size: 1rem; margin-bottom: 14px; color: #a78bfa; }
+.share-card p  { font-size: 0.8rem; color: #888; margin-bottom: 10px; line-height: 1.5; }
+.share-card code {
+  display: block;
+  background: #111;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: #7ee787;
+  margin-bottom: 12px;
+}
+.share-card button { margin-top: 4px; width: 100%; }
+#btnCloseShare { background: #333; color: #ccc; }
 </style>
 </head>
 <body>
 
-<h1>Real-time Lip Sync</h1>
+<h1>DeepFace Live</h1>
 
-<div class="video-row">
-  <div class="video-box">
-    <label>Your Camera</label>
+<div class="stage">
+
+  <!-- Source face panel -->
+  <div class="panel">
+    <div class="panel-label">Source face</div>
+    <div id="dropZone" onclick="document.getElementById('fileInput').click()"
+         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <div class="placeholder">
+        <svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+        <span>Drop photo here<br>or click to browse</span>
+      </div>
+      <img id="facePreview" style="display:none">
+      <div id="faceBadge">✓ Face detected</div>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" onchange="onFileSelect(event)">
+  </div>
+
+  <div class="arrow">→</div>
+
+  <!-- Output panel -->
+  <div class="panel">
+    <div class="panel-label">Output (deepfake)</div>
+    <canvas id="outputCanvas" width="480" height="360"></canvas>
+  </div>
+
+  <!-- Cam preview (top-right corner style) -->
+  <div class="panel">
+    <div class="panel-label">Your cam</div>
     <video id="localVideo" autoplay muted playsinline></video>
   </div>
-  <div class="video-box">
-    <label>Lip-synced Output</label>
-    <canvas id="outputCanvas"></canvas>
-  </div>
+
 </div>
 
+<!-- Controls -->
 <div class="controls">
-  <button id="btnStart">Start</button>
-  <button id="btnStop" disabled>Stop</button>
-  <button id="btnVcam" disabled title="Requires OBS Virtual Camera or v4l2loopback">
-    Send to Virtual Camera
-  </button>
-  <label style="font-size:0.85rem">
-    Server: <input id="serverUrl" type="text" value="ws://localhost:8000/ws/lipsync"
-      style="background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:4px;padding:4px 8px;width:280px">
-  </label>
+  <button id="btnStart">▶ Start</button>
+  <button id="btnStop"  disabled>■ Stop</button>
+  <button id="btnShare" disabled>📺 Use as Virtual Camera</button>
 </div>
 
-<div class="status-bar">
+<div class="server-row">
+  Server:
+  <input id="serverUrl" type="text" value="ws://localhost:8000/ws/deepfake">
+</div>
+
+<div class="status-row">
   <span><span class="dot" id="dotWs"></span><span id="wsStatus">Disconnected</span></span>
   <span><span class="dot" id="dotCam"></span><span id="camStatus">No camera</span></span>
+  <span><span class="dot" id="dotFace"></span><span id="faceStatus">No source face</span></span>
 </div>
 
-<div id="statsBar">fps out: — &nbsp;|&nbsp; latency: — &nbsp;|&nbsp; frames sent: —</div>
+<div id="statsBar">fps: — &nbsp;|&nbsp; latency: — &nbsp;|&nbsp; frames: —</div>
 <div id="errBar"></div>
+
+<!-- Share overlay -->
+<div id="shareOverlay">
+  <div class="share-card">
+    <h2>📺 Use as Virtual Camera</h2>
+    <p>The deepfake output is now captured as a MediaStream. To use it in video calls:</p>
+    <p><strong>Option 1 — Share browser tab:</strong><br>In Zoom/Meet/Teams, choose "Share Screen" → select this browser tab.</p>
+    <p><strong>Option 2 — OBS Virtual Camera (best):</strong></p>
+    <code>1. Open OBS → Add Source → Browser Source
+2. URL: http://localhost:8000
+3. Start Virtual Camera in OBS
+4. In Zoom/Meet, select "OBS Virtual Camera"</code>
+    <p><strong>Option 3 — Linux v4l2loopback:</strong></p>
+    <code>ffmpeg -f x11grab -s 480x360 -r 25 \
+  -i :0.0+&lt;x&gt;,&lt;y&gt; \
+  -vf format=yuv420p \
+  -f v4l2 /dev/video10</code>
+    <button id="btnCloseShare" onclick="closeShare()">Close</button>
+  </div>
+</div>
 
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
-// Configuration
+// Config
 // ─────────────────────────────────────────────────────────────────────────────
-const TARGET_FPS        = 25;
-const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
-const AUDIO_CHUNK_MS    = 40;           // must align with server config
-const JPEG_QUALITY      = 0.7;
-const SAMPLE_RATE       = 16000;
+const TARGET_FPS      = 25;
+const FRAME_INTERVAL  = 1000 / TARGET_FPS;
+const JPEG_QUALITY    = 0.8;
+const CAP_W = 640, CAP_H = 480;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────────────────
-let ws            = null;
-let localStream   = null;
-let audioCtx      = null;
-let scriptNode    = null;
-let captureTimer  = null;
-let stats = { sent: 0, received: 0, totalLatency: 0, lastSentTime: 0, fps: 0 };
-let fpsCounter = { frames: 0, last: performance.now() };
+let ws = null, localStream = null, captureTimer = null;
+let sourceReady = false;
+let stats = { sent: 0, received: 0, totalLat: 0, fps: 0 };
+let fpsCounter = { n: 0, last: performance.now() };
 
-const localVideo    = document.getElementById('localVideo');
-const outputCanvas  = document.getElementById('outputCanvas');
-const ctx2d         = outputCanvas.getContext('2d');
-const btnStart      = document.getElementById('btnStart');
-const btnStop       = document.getElementById('btnStop');
-const btnVcam       = document.getElementById('btnVcam');
-const dotWs         = document.getElementById('dotWs');
-const wsStatusEl    = document.getElementById('wsStatus');
-const dotCam        = document.getElementById('dotCam');
-const camStatusEl   = document.getElementById('camStatus');
-const statsBar      = document.getElementById('statsBar');
+const outputCanvas = document.getElementById('outputCanvas');
+const ctx2d        = outputCanvas.getContext('2d');
+const localVideo   = document.getElementById('localVideo');
+const btnStart     = document.getElementById('btnStart');
+const btnStop      = document.getElementById('btnStop');
+const btnShare     = document.getElementById('btnShare');
 
-// Offscreen capture canvas (shared, resized once)
-const captureCanvas = document.createElement('canvas');
-captureCanvas.width  = 640;
-captureCanvas.height = 480;
-const captureCtx = captureCanvas.getContext('2d');
+// Offscreen capture canvas
+const capCanvas = document.createElement('canvas');
+capCanvas.width = CAP_W; capCanvas.height = CAP_H;
+const capCtx = capCanvas.getContext('2d');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Source face upload
+// ─────────────────────────────────────────────────────────────────────────────
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.add('drag-over');
+}
+function onDragLeave(e) {
+  document.getElementById('dropZone').classList.remove('drag-over');
+}
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadFace(file);
+}
+function onFileSelect(e) {
+  const file = e.target.files[0];
+  if (file) uploadFace(file);
+}
+
+async function uploadFace(file) {
+  // Show preview immediately
+  const previewUrl = URL.createObjectURL(file);
+  const img = document.getElementById('facePreview');
+  img.src = previewUrl;
+  img.style.display = 'block';
+  document.querySelector('#dropZone .placeholder').style.display = 'none';
+  document.getElementById('faceBadge').style.display = 'none';
+  setFaceStatus('Uploading…', 'yellow');
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const serverBase = document.getElementById('serverUrl').value
+      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
+    const resp = await fetch(serverBase + '/api/source-face', {
+      method: 'POST', body: form,
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      document.getElementById('faceBadge').style.display = 'block';
+      setFaceStatus('Face ready', 'green');
+      sourceReady = true;
+    } else {
+      setFaceStatus(data.error || 'Upload failed', 'red');
+      logErr(data.error || 'Face upload failed');
+    }
+  } catch (e) {
+    setFaceStatus('Upload error', 'red');
+    logErr('Upload: ' + e.message);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket
@@ -129,212 +398,80 @@ function connectWs(url) {
   ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
 
-  ws.onopen = () => {
-    setWsStatus('Connected', 'green');
-    btnVcam.disabled = false;
-  };
-
-  ws.onclose = () => {
-    setWsStatus('Disconnected', 'red');
-    btnVcam.disabled = true;
-  };
-
+  ws.onopen  = () => { setWsStatus('Connected', 'green'); btnShare.disabled = false; };
+  ws.onclose = () => { setWsStatus('Disconnected', 'red'); btnShare.disabled = true; };
   ws.onerror = () => setWsStatus('Error', 'red');
 
   ws.onmessage = (ev) => {
-    const buf = ev.data;
-    if (buf.byteLength < 20) return;
+    const jpegData = new Uint8Array(ev.data);
 
-    const view = new DataView(buf);
-    const videoSz   = view.getUint32(4, false);
-    const latencyMs = view.getUint32(16, false);
-
-    if (videoSz === 0 || 20 + videoSz > buf.byteLength) {
-      logErr(`bad frame: videoSz=${videoSz} bufLen=${buf.byteLength}`); return;
-    }
-
-    // Copy bytes out of the ArrayBuffer (avoid shared-buffer slice issues)
-    const jpegData = new Uint8Array(buf.slice(20, 20 + videoSz));
-
-    // Verify JPEG magic bytes FF D8
-    const magic = jpegData[0].toString(16).padStart(2,'0') + jpegData[1].toString(16).padStart(2,'0');
-    if (magic !== 'ffd8') {
-      logErr(`not a JPEG: first bytes ${magic}, size=${videoSz}`); return;
+    // Verify JPEG magic
+    if (jpegData[0] !== 0xFF || jpegData[1] !== 0xD8) {
+      logErr('bad JPEG magic'); return;
     }
 
     const blob = new Blob([jpegData], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      outputCanvas.width  = img.naturalWidth;
-      outputCanvas.height = img.naturalHeight;
-      ctx2d.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
+    createImageBitmap(blob).then(bmp => {
+      outputCanvas.width  = bmp.width;
+      outputCanvas.height = bmp.height;
+      ctx2d.drawImage(bmp, 0, 0);
+      bmp.close();
+      stats.received++;
 
-      ctx2d.fillStyle = 'lime';
-      ctx2d.font = '14px monospace';
-      ctx2d.fillText(`${img.naturalWidth}x${img.naturalHeight} frame#${stats.received}`, 8, 20);
-
-      fpsCounter.frames++;
+      fpsCounter.n++;
       const now = performance.now();
       if (now - fpsCounter.last >= 1000) {
-        stats.fps = fpsCounter.frames;
-        fpsCounter.frames = 0;
+        stats.fps = fpsCounter.n;
+        fpsCounter.n = 0;
         fpsCounter.last = now;
       }
-      document.getElementById('errBar').textContent =
-        `last frame: ${videoSz}B → ${img.naturalWidth}x${img.naturalHeight}`;
-    };
-    img.onerror = (e) => { URL.revokeObjectURL(url); logErr(`img.onerror size=${videoSz} magic=${magic}`); };
-    img.src = url;
-
-    stats.received++;
-    stats.totalLatency += latencyMs;
-    updateStats();
+      updateStats();
+    }).catch(e => logErr('decode: ' + e.message));
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Camera + Audio capture
+// Capture
 // ─────────────────────────────────────────────────────────────────────────────
 async function startCapture() {
   localStream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 640, height: 480, frameRate: TARGET_FPS },
-    audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true },
+    video: { width: CAP_W, height: CAP_H, frameRate: TARGET_FPS },
+    audio: false,
   });
   localVideo.srcObject = localStream;
   setCamStatus('Active', 'green');
-
-  // Audio pipeline: MediaStream → ScriptProcessor → PCM int16 chunks
-  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  const source = audioCtx.createMediaStreamSource(localStream);
-  const bufferSize = 1024;  // must be power of 2; 1024 ≈ 64ms at 16kHz
-  scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
-  source.connect(scriptNode);
-  scriptNode.connect(audioCtx.destination);
-
-  let pendingAudio = new Float32Array(0);
-
-  scriptNode.onaudioprocess = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const f32 = e.inputBuffer.getChannelData(0);
-    // Accumulate then send as chunk
-    const combined = new Float32Array(pendingAudio.length + f32.length);
-    combined.set(pendingAudio);
-    combined.set(f32, pendingAudio.length);
-    pendingAudio = combined;
-
-    // We send along with the video frame — just store for next sendFrame()
-    window._pendingAudioBuffer = pendingAudio.slice();
-    pendingAudio = new Float32Array(0);
-  };
-
-  // Video frame pump
-  captureTimer = setInterval(sendFrame, FRAME_INTERVAL_MS);
+  captureTimer = setInterval(sendFrame, FRAME_INTERVAL);
 }
 
 function stopCapture() {
   if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
-  if (scriptNode)  { scriptNode.disconnect(); scriptNode = null; }
-  if (audioCtx)    { audioCtx.close(); audioCtx = null; }
-  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  if (localStream)  { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   localVideo.srcObject = null;
   setCamStatus('Stopped', 'yellow');
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Binary frame packing  [4B type][4B audio_sz][4B video_sz][8B ts_ms][audio][video]
-// ─────────────────────────────────────────────────────────────────────────────
 function sendFrame() {
-  // setInterval swallows async errors — keep this sync and wrap everything
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (!localVideo || localVideo.readyState < 2) return;  // video not playing yet
+  if (!localVideo || localVideo.readyState < 2) return;
 
-  captureCtx.drawImage(localVideo, 0, 0, captureCanvas.width, captureCanvas.height);
-
-  captureCanvas.toBlob(blob => {
-    try {
-      if (!blob) { logErr('toBlob returned null'); return; }
-      blob.arrayBuffer().then(videoBuf => {
-        const videoBytes = new Uint8Array(videoBuf);
-
-        // Drain audio, convert float32 → int16
-        const f32Audio = window._pendingAudioBuffer || new Float32Array(0);
-        window._pendingAudioBuffer = null;
-        const i16Audio = new Int16Array(f32Audio.length);
-        for (let i = 0; i < f32Audio.length; i++) {
-          i16Audio[i] = Math.max(-32768, Math.min(32767, Math.round(f32Audio[i] * 32767)));
-        }
-        const audioBytes = new Uint8Array(i16Audio.buffer);
-
-        // Header: [4B "FRAM"][4B audio_sz][4B video_sz][4B ts_hi][4B ts_lo]
-        // Avoid BigInt/setBigUint64 for max browser compat — split ts into hi/lo uint32
-        const tsMs = Date.now();
-        const header = new ArrayBuffer(20);
-        const hv = new DataView(header);
-        hv.setUint8(0, 70); hv.setUint8(1, 82); hv.setUint8(2, 65); hv.setUint8(3, 77); // "FRAM"
-        hv.setUint32(4, audioBytes.byteLength, false);
-        hv.setUint32(8, videoBytes.byteLength, false);
-        hv.setUint32(12, Math.floor(tsMs / 0x100000000), false);  // hi 32 bits
-        hv.setUint32(16, tsMs >>> 0, false);                       // lo 32 bits
-
-        const msg = new Uint8Array(20 + audioBytes.byteLength + videoBytes.byteLength);
-        msg.set(new Uint8Array(header), 0);
-        msg.set(audioBytes, 20);
-        msg.set(videoBytes, 20 + audioBytes.byteLength);
-
-        ws.send(msg.buffer);
-        stats.sent++;
-        updateStats();
-      }).catch(e => logErr('arrayBuffer: ' + e.message));
-    } catch(e) { logErr('sendFrame inner: ' + e.message); }
+  capCtx.drawImage(localVideo, 0, 0, CAP_W, CAP_H);
+  capCanvas.toBlob(blob => {
+    if (!blob) return;
+    blob.arrayBuffer().then(buf => {
+      ws.send(buf);
+      stats.sent++;
+    }).catch(e => logErr('arrayBuffer: ' + e.message));
   }, 'image/jpeg', JPEG_QUALITY);
 }
 
-function logErr(msg) {
-  console.error('[lipsync]', msg);
-  document.getElementById('errBar').textContent = 'ERR: ' + msg;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Virtual camera via OBS WebSocket (optional)
-// Requires OBS with Virtual Camera + obs-websocket plugin
+// Virtual camera share
 // ─────────────────────────────────────────────────────────────────────────────
-function startVirtualCam() {
-  // Capture the output canvas as a MediaStream and assign to a hidden video
-  // element. The user then selects "Browser Source" or uses OBS Virtual Camera.
-  const stream = outputCanvas.captureStream(TARGET_FPS);
-  const vid = document.createElement('video');
-  vid.srcObject = stream;
-  vid.autoplay = true;
-  vid.muted = true;
-  vid.style.display = 'none';
-  document.body.appendChild(vid);
-  alert(
-    'Output stream captured.\n\n' +
-    'To use as a virtual webcam:\n' +
-    '• Windows/Mac: Install OBS → Start Virtual Camera → Add Browser Source pointing to this page\n' +
-    '• Linux: Use v4l2loopback (see README for ffmpeg command)\n\n' +
-    'Or share this tab\'s screen directly in your video call.'
-  );
+function openShare() {
+  document.getElementById('shareOverlay').classList.add('show');
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UI helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function setWsStatus(text, color) {
-  wsStatusEl.textContent = text;
-  dotWs.className = 'dot ' + color;
-}
-function setCamStatus(text, color) {
-  camStatusEl.textContent = text;
-  dotCam.className = 'dot ' + color;
-}
-function updateStats() {
-  const avgLat = stats.received > 0
-    ? Math.round(stats.totalLatency / stats.received) : 0;
-  statsBar.textContent =
-    `fps out: ${stats.fps} | latency: ${avgLat}ms | frames sent: ${stats.sent}`;
+function closeShare() {
+  document.getElementById('shareOverlay').classList.remove('show');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,7 +485,7 @@ btnStart.onclick = async () => {
     await startCapture();
     btnStop.disabled = false;
   } catch (e) {
-    alert('Error: ' + e.message);
+    logErr(e.message);
     btnStart.disabled = false;
   }
 };
@@ -358,12 +495,48 @@ btnStop.onclick = () => {
   if (ws) { ws.close(); ws = null; }
   btnStart.disabled = false;
   btnStop.disabled  = true;
-  btnVcam.disabled  = true;
-  stats = { sent: 0, received: 0, totalLatency: 0, fps: 0 };
+  stats = { sent:0, received:0, totalLat:0, fps:0 };
   updateStats();
 };
 
-btnVcam.onclick = startVirtualCam;
+btnShare.onclick = openShare;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function setWsStatus(t, c)   { wsStatusEl.textContent = t; dotWs.className = 'dot ' + c; }
+function setCamStatus(t, c)  { camStatusEl.textContent = t; dotCam.className = 'dot ' + c; }
+function setFaceStatus(t, c) { faceStatusEl.textContent = t; dotFace.className = 'dot ' + c; }
+function logErr(msg) {
+  console.error('[deepface]', msg);
+  document.getElementById('errBar').textContent = msg;
+}
+function updateStats() {
+  document.getElementById('statsBar').textContent =
+    `fps: ${stats.fps}  |  frames sent: ${stats.sent}  |  received: ${stats.received}`;
+}
+
+const wsStatusEl   = document.getElementById('wsStatus');
+const camStatusEl  = document.getElementById('camStatus');
+const faceStatusEl = document.getElementById('faceStatus');
+const dotWs        = document.getElementById('dotWs');
+const dotCam       = document.getElementById('dotCam');
+const dotFace      = document.getElementById('dotFace');
+
+// Fetch pre-loaded face status on load
+(async () => {
+  try {
+    const serverBase = document.getElementById('serverUrl').value
+      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
+    const resp = await fetch(serverBase + '/health');
+    const data = await resp.json();
+    if (data.source_face_set) {
+      setFaceStatus('Face ready (pre-loaded)', 'green');
+      sourceReady = true;
+      document.querySelector('#dropZone .placeholder span').textContent = 'Face pre-loaded — click to change';
+    }
+  } catch(_) {}
+})();
 </script>
 </body>
 </html>
