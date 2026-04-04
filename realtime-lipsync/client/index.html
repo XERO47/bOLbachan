@@ -271,6 +271,16 @@ button:disabled { opacity: 0.35; cursor: default; }
   <button id="btnStart">▶ Start</button>
   <button id="btnStop"  disabled>■ Stop</button>
   <button id="btnShare" disabled>📺 Use as Virtual Camera</button>
+  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer">
+    <input type="checkbox" id="chkEnhance" onchange="toggleSetting('enhance', this.checked)"
+      style="accent-color:#7c3aed;width:14px;height:14px">
+    Face Enhance (GFPGAN)
+  </label>
+  <label style="font-size:0.8rem;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer">
+    <input type="checkbox" id="chkColor" checked onchange="toggleSetting('color_correct', this.checked)"
+      style="accent-color:#7c3aed;width:14px;height:14px">
+    Color Correct
+  </label>
 </div>
 
 <div class="server-row">
@@ -522,6 +532,22 @@ const faceStatusEl = document.getElementById('faceStatus');
 const dotWs        = document.getElementById('dotWs');
 const dotCam       = document.getElementById('dotCam');
 const dotFace      = document.getElementById('dotFace');
+
+async function toggleSetting(key, val) {
+  try {
+    const serverBase = document.getElementById('serverUrl').value
+      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
+    const resp = await fetch(serverBase + '/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: val }),
+    });
+    const data = await resp.json();
+    if (data.error) logErr(data.error);
+    else document.getElementById('errBar').textContent =
+      `enhance=${data.enhance}  color_correct=${data.color_correct}`;
+  } catch(e) { logErr('settings: ' + e.message); }
+}
 
 // Fetch pre-loaded face status on load
 (async () => {

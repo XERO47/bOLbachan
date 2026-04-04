@@ -8,6 +8,7 @@ REST:
   GET  /                      → index.html
   GET  /health
   POST /api/source-face       → multipart image upload, sets swap target
+  POST /api/settings          → {"enhance": bool, "color_correct": bool}
 """
 
 import asyncio
@@ -90,6 +91,28 @@ async def health():
 async def index():
     with open(_CLIENT_DIR / "index.html") as f:
         return HTMLResponse(f.read())
+
+
+@app.post("/api/settings")
+async def update_settings(body: dict):
+    """Toggle enhance / color_correct at runtime without restarting."""
+    if _pipeline is None:
+        return JSONResponse({"error": "pipeline not ready"}, status_code=503)
+    if "enhance" in body:
+        val = bool(body["enhance"])
+        if val and not _pipeline._use_enhance:
+            # Load GFPGAN on demand
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(_executor, _pipeline._load_gfpgan)
+        _pipeline._use_enhance = val and _pipeline.enhancer is not None
+    if "color_correct" in body:
+        _pipeline._use_color = bool(body["color_correct"])
+    logger.info("Settings updated  enhance=%s  color=%s",
+                _pipeline._use_enhance, _pipeline._use_color)
+    return {
+        "enhance": _pipeline._use_enhance,
+        "color_correct": _pipeline._use_color,
+    }
 
 
 @app.post("/api/source-face")
