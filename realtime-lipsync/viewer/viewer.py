@@ -32,7 +32,7 @@ except ImportError:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DEFAULT_SERVER = "ws://205.147.101.238:8000/ws/deepfake"
+DEFAULT_SERVER = "ws://205.147.102.96:8000/ws/deepfake"
 DEFAULT_CAM    = 0
 DEFAULT_FPS    = 25
 DEFAULT_W      = 640
