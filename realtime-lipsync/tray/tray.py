@@ -132,7 +132,6 @@ async def _ws_loop(server_url: str, cam_idx: int):
                     if rgb.shape[:2] != (CAP_H, CAP_W):
                         rgb = cv2.resize(rgb, (CAP_W, CAP_H))
                     vcam.send(rgb)
-                    vcam.sleep_until_next_frame()
 
             vcam = None
             if _VCAM_AVAILABLE:
