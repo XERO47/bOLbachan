@@ -21,6 +21,7 @@ Face cache:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import cv2
@@ -30,9 +31,51 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_DIR   = Path(__file__).parent.parent.resolve()
 INSWAPPER_CKPT = _PROJECT_DIR / "models" / "inswapper_128.onnx"
+_TRT_CACHE     = str(_PROJECT_DIR / "models" / "trt_cache")
 _MAX_CACHE     = 5
 
-_ORT_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+def _build_providers():
+    """
+    Try TensorRT (FP16) first, fall back to CUDA, then CPU.
+
+    TRT libs can be either:
+      a) system-installed (/usr/lib/x86_64-linux-gnu) — TRT 8.x
+      b) pip-installed (tensorrt_libs package)        — TRT 10.x
+
+    We detect (b) and add its path to LD_LIBRARY_PATH so ORT can find them.
+    """
+    # Detect pip-installed TRT libs (tensorrt 10.x from pypi.nvidia.com)
+    try:
+        import tensorrt_libs
+        trt_lib_dir = str(Path(tensorrt_libs.__file__).parent)
+        current = os.environ.get("LD_LIBRARY_PATH", "")
+        if trt_lib_dir not in current:
+            os.environ["LD_LIBRARY_PATH"] = f"{trt_lib_dir}:{current}"
+            logger.info("TRT libs (pip): %s", trt_lib_dir)
+    except ImportError:
+        pass  # system TRT or no TRT — LD_LIBRARY_PATH already set externally
+
+    os.makedirs(_TRT_CACHE, exist_ok=True)
+
+    trt_opts = {
+        "device_id": 0,
+        "trt_max_workspace_size": 4 * 1024 * 1024 * 1024,  # 4 GB
+        "trt_fp16_enable": True,
+        "trt_engine_cache_enable": True,
+        "trt_engine_cache_path": _TRT_CACHE,
+        "trt_timing_cache_enable": True,
+        "trt_timing_cache_path": _TRT_CACHE,
+    }
+
+    return [
+        ("TensorrtExecutionProvider", trt_opts),
+        ("CUDAExecutionProvider", {"device_id": 0}),
+        "CPUExecutionProvider",
+    ]
+
+
+_ORT_PROVIDERS = _build_providers()
 
 
 # ── Masks ─────────────────────────────────────────────────────────────────────
@@ -103,7 +146,11 @@ class DeepFakePipeline:
             allowed_modules=["detection", "landmark_2d_106", "recognition"],
         )
         self.face_app.prepare(ctx_id=0, det_size=(320, 320))
-        logger.info("InsightFace FaceAnalysis ready")
+
+        # Log which provider is actually active
+        det_model = next(iter(self.face_app.models.values()))
+        active = getattr(det_model.session, 'get_providers', lambda: ['?'])()
+        logger.info("InsightFace FaceAnalysis ready — provider: %s", active[0] if active else '?')
 
         if not INSWAPPER_CKPT.exists():
             raise FileNotFoundError(f"inswapper_128.onnx not found at {INSWAPPER_CKPT}")
