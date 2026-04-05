@@ -99,8 +99,9 @@ class DeepFakePipeline:
             name="buffalo_l",
             root=str(_PROJECT_DIR),
             providers=_ORT_PROVIDERS,
+            allowed_modules=["detection", "landmark_2d_106", "recognition"],
         )
-        self.face_app.prepare(ctx_id=0, det_size=(640, 640))
+        self.face_app.prepare(ctx_id=0, det_size=(320, 320))
         logger.info("InsightFace FaceAnalysis ready")
 
         if not INSWAPPER_CKPT.exists():
@@ -169,11 +170,20 @@ class DeepFakePipeline:
 
         return "ok"
 
+    _perf_n = 0
+    _perf_det = 0.0
+    _perf_swap = 0.0
+    _perf_mask = 0.0
+    _PERF_EVERY = 100   # log timing every N frames
+
     def process(self, frame_bgr: np.ndarray) -> np.ndarray:
+        import time as _time
         if self._source_face is None:
             return frame_bgr
 
+        t_det = _time.perf_counter()
         live_faces = self.face_app.get(frame_bgr)
+        self._perf_det += _time.perf_counter() - t_det
 
         if live_faces:
             live_faces.sort(
@@ -189,11 +199,14 @@ class DeepFakePipeline:
             live_faces = self._cached_faces
 
         # ── Inswapper ────────────────────────────────────────────────────────
+        t_swap = _time.perf_counter()
         swapped = frame_bgr.copy()
         for face in live_faces:
             swapped = self.swapper.get(swapped, face, self._source_face, paste_back=True)
+        self._perf_swap += _time.perf_counter() - t_swap
 
         # ── 106-landmark face mask → natural blend ────────────────────────────
+        t_mask = _time.perf_counter()
         # Use the primary (largest) face's landmarks for the mask.
         # If landmarks aren't available (shouldn't happen with buffalo_l), fall back.
         ref = live_faces[0]
@@ -209,7 +222,21 @@ class DeepFakePipeline:
                 mm = _mouth_mask(frame_bgr.shape, kps, self.mouth_scale)
                 result = _blend(frame_bgr, result, mm)
 
+            self._perf_mask += _time.perf_counter() - t_mask
+            self._perf_n += 1
+            if self._perf_n % self._PERF_EVERY == 0:
+                n = self._PERF_EVERY
+                logger.info(
+                    "PERF[%d] det=%.1fms swap=%.1fms mask=%.1fms total=%.1fms",
+                    self._perf_n,
+                    self._perf_det / n * 1000,
+                    self._perf_swap / n * 1000,
+                    self._perf_mask / n * 1000,
+                    (self._perf_det + self._perf_swap + self._perf_mask) / n * 1000,
+                )
+                self._perf_det = self._perf_swap = self._perf_mask = 0.0
             return result
 
+        self._perf_mask += _time.perf_counter() - t_mask
         # Fallback: return raw inswapper result
         return swapped
