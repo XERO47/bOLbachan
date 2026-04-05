@@ -2,17 +2,21 @@
 DeepFace Live — Webcam Tray Utility
 =====================================
 Sits in the Windows system tray.
-Right-click → Start Streaming  : captures webcam, sends frames to server
+Right-click → Start Streaming  : captures webcam, sends frames to server,
+                                  feeds processed frames into a virtual camera
 Right-click → Stop Streaming   : stops
-Right-click → Settings         : change server URL / camera index
 Right-click → Quit
 
 Install:
-    pip install pystray pillow opencv-python websockets numpy
+    pip install pystray pillow opencv-python websockets numpy pyvirtualcam
+
+Virtual camera (pick one driver — install once):
+    OBS Studio  https://obsproject.com/  (use its built-in virtual camera driver)
+    OR OBS-Camera plugin for just the driver without full OBS
 
 Run:
     python tray.py
-    python tray.py --server wss://xxx.trycloudflare.com/ws/deepfake
+    python tray.py --server ws://205.147.101.226:8000/ws/deepfake --start
 """
 
 import argparse
@@ -37,6 +41,14 @@ try:
     import websockets
 except ImportError:
     raise SystemExit("pip install websockets")
+
+try:
+    import pyvirtualcam
+    _VCAM_AVAILABLE = True
+except ImportError:
+    _VCAM_AVAILABLE = False
+    print("[tray] pyvirtualcam not installed — virtual camera disabled"
+          " (pip install pyvirtualcam)")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -104,13 +116,37 @@ async def _ws_loop(server_url: str, cam_idx: int):
             ping_timeout=20,
         ) as ws:
             print("[tray] Connected — streaming")
-            async def _drain():
-                # Drain incoming frames (we don't display them)
-                async for _ in ws:
+            async def _recv_to_vcam(vcam):
+                """Receive processed frames from server → push to virtual camera."""
+                async for data in ws:
                     if _stop_evt.is_set():
                         break
+                    if not isinstance(data, bytes) or vcam is None:
+                        continue
+                    arr = np.frombuffer(data, np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+                    # pyvirtualcam expects RGB
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if rgb.shape[:2] != (CAP_H, CAP_W):
+                        rgb = cv2.resize(rgb, (CAP_W, CAP_H))
+                    vcam.send(rgb)
+                    vcam.sleep_until_next_frame()
 
-            drain_task = asyncio.create_task(_drain())
+            vcam = None
+            if _VCAM_AVAILABLE:
+                try:
+                    vcam = pyvirtualcam.Camera(
+                        width=CAP_W, height=CAP_H, fps=FPS,
+                        fmt=pyvirtualcam.PixelFormat.RGB,
+                    )
+                    print(f"[tray] Virtual camera: {vcam.device}")
+                except Exception as e:
+                    print(f"[tray] Virtual camera failed ({e}) — frames will be discarded")
+                    vcam = None
+
+            drain_task = asyncio.create_task(_recv_to_vcam(vcam))
             try:
                 while not _stop_evt.is_set():
                     t0 = time.monotonic()
@@ -123,6 +159,8 @@ async def _ws_loop(server_url: str, cam_idx: int):
                     await asyncio.sleep(max(0.001, interval - elapsed))
             finally:
                 drain_task.cancel()
+                if vcam is not None:
+                    vcam.close()
     except Exception as e:
         print(f"[tray] Connection error: {e}")
     finally:
