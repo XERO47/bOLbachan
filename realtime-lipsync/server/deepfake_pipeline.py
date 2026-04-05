@@ -61,7 +61,7 @@ def _build_providers():
     trt_opts = {
         "device_id": 0,
         "trt_max_workspace_size": 4 * 1024 * 1024 * 1024,  # 4 GB
-        "trt_fp16_enable": True,
+        "trt_fp16_enable": False,
         "trt_engine_cache_enable": True,
         "trt_engine_cache_path": _TRT_CACHE,
         "trt_timing_cache_enable": True,
