@@ -135,15 +135,22 @@ class DeepFakePipeline:
         if faces:
             faces.sort(key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)
             src_face = faces[0]
-            # Run inswapper several times to compile CUDA kernels
-            for _ in range(5):
-                try:
-                    self.swapper.get(avatar, faces[0], src_face, paste_back=True)
-                except Exception:
-                    pass
-            logger.info("Warmup done in %.1fs — inswapper kernels compiled", time.time() - t0)
+            self._source_face = src_face          # pre-set so process() is live immediately
+            self._warmup_inswapper(avatar, src_face)
+            logger.info("Full warmup done in %.1fs", time.time() - t0)
         else:
-            logger.info("Warmup: no face in avatar image, skipping inswapper warmup")
+            logger.info("Warmup: no face in avatar image — inswapper will warm up on first set_source call")
+
+    def _warmup_inswapper(self, image_bgr: np.ndarray, face) -> None:
+        """Run inswapper N times on a real face to compile CUDA kernels."""
+        import time
+        t0 = time.time()
+        for _ in range(5):
+            try:
+                self.swapper.get(image_bgr.copy(), face, face, paste_back=True)
+            except Exception:
+                pass
+        logger.info("Inswapper warmup done in %.1fs — CUDA kernels compiled", time.time() - t0)
 
     def set_source(self, image_bgr: np.ndarray) -> str:
         faces = self.face_app.get(image_bgr)
@@ -154,6 +161,12 @@ class DeepFakePipeline:
         self._cached_faces = None
         self._missed       = 0
         logger.info("Source face set  bbox=%s", self._source_face.bbox)
+
+        # Compile CUDA kernels using the just-uploaded face (first call will be slow
+        # on a fresh instance; this warmup prevents that hitting live frames).
+        logger.info("Warming up inswapper with source face…")
+        self._warmup_inswapper(image_bgr, self._source_face)
+
         return "ok"
 
     def process(self, frame_bgr: np.ndarray) -> np.ndarray:
