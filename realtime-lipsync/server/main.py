@@ -246,60 +246,83 @@ async def ws_deepfake(ws: WebSocket):
 
     frames_in = frames_out = 0
     total_lat = 0.0
-    running = False
+
+    # Size-1 queue: receive loop always overwrites with the latest frame.
+    # Process loop always gets the freshest frame, never a stale one.
+    latest: asyncio.Queue = asyncio.Queue(maxsize=1)
+    stop = asyncio.Event()
+
+    async def _receive():
+        """Drain the socket as fast as possible; keep only the newest frame."""
+        nonlocal frames_in
+        try:
+            while not stop.is_set():
+                data = await ws.receive_bytes()
+                frames_in += 1
+                # Replace any un-consumed frame with this newer one
+                if latest.full():
+                    try:
+                        latest.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                await latest.put(data)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            stop.set()
+
+    async def _process():
+        """Process the latest frame; never falls behind because receive drains independently."""
+        nonlocal frames_out, total_lat
+        loop = asyncio.get_event_loop()
+        try:
+            while not stop.is_set():
+                try:
+                    jpeg_bytes = await asyncio.wait_for(latest.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                recv_ms = time.time() * 1000
+
+                arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    continue
+
+                try:
+                    processed = await loop.run_in_executor(
+                        _executor, _pipeline.process, frame
+                    )
+                except Exception as e:
+                    logger.exception("Inference error: %s", e)
+                    continue
+
+                ok, jpg = cv2.imencode(
+                    ".jpg", processed,
+                    [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+                )
+                if not ok:
+                    continue
+
+                frame_bytes = jpg.tobytes()
+
+                global _mjpeg_frame
+                _mjpeg_frame = frame_bytes
+                for sub_q in list(_mjpeg_subs) + list(_display_subs):
+                    if not sub_q.full():
+                        sub_q.put_nowait(frame_bytes)
+
+                try:
+                    await ws.send_bytes(frame_bytes)
+                except (WebSocketDisconnect, RuntimeError):
+                    break
+                frames_out += 1
+                total_lat += time.time() * 1000 - recv_ms
+        finally:
+            stop.set()
 
     try:
-        while True:
-            jpeg_bytes = await ws.receive_bytes()
-            recv_ms = time.time() * 1000
-
-            # Decode JPEG
-            arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if frame is None:
-                continue
-            frames_in += 1
-
-            # Skip if previous inference still in flight
-            if running:
-                continue
-
-            running = True
-            loop = asyncio.get_event_loop()
-            try:
-                processed = await loop.run_in_executor(
-                    _executor, _pipeline.process, frame
-                )
-            except Exception as e:
-                logger.exception("Inference error: %s", e)
-                running = False
-                continue
-            finally:
-                running = False
-
-            # Encode and send
-            ok, jpg = cv2.imencode(
-                ".jpg", processed,
-                [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-            )
-            if not ok:
-                continue
-
-            frame_bytes = jpg.tobytes()
-
-            # Broadcast to all passive subscribers (MJPEG + WS display)
-            global _mjpeg_frame
-            _mjpeg_frame = frame_bytes
-            for sub_q in list(_mjpeg_subs) + list(_display_subs):
-                if not sub_q.full():
-                    sub_q.put_nowait(frame_bytes)
-
-            await ws.send_bytes(frame_bytes)
-            frames_out += 1
-            total_lat += time.time() * 1000 - recv_ms
-
-    except WebSocketDisconnect:
-        pass
+        await asyncio.gather(_receive(), _process())
     except Exception as e:
         logger.exception("WS error: %s", e)
     finally:
