@@ -114,7 +114,24 @@ class DeepFakePipeline:
         self._cached_faces = None
         self._missed       = 0
         self.mouth_scale   = 0.15  # tunable: 0=no cutout, 0.15=default, 2=large
+
+        self._warmup()
         logger.info("DeepFakePipeline ready")
+
+    def _warmup(self):
+        """Push dummy frames through both models to JIT-compile CUDA kernels."""
+        import time
+        logger.info("Warming up CUDA kernels…")
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        # Warmup face detector
+        for _ in range(3):
+            self.face_app.get(dummy)
+        t0 = time.time()
+        # Warmup with a real-looking frame (random noise so detector tries)
+        noise = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        for _ in range(5):
+            self.face_app.get(noise)
+        logger.info("Warmup done in %.1fs", time.time() - t0)
 
     def set_source(self, image_bgr: np.ndarray) -> str:
         faces = self.face_app.get(image_bgr)
