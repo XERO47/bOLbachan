@@ -35,7 +35,7 @@ sleep 1
 echo "==> Starting DeepFace server in tmux session 'deepfake'..."
 tmux new-session -d -s deepfake -x 220 -y 50
 tmux send-keys -t deepfake \
-  "cd $PROJECT_DIR/server && PYTHONPATH=. SOURCE_FACE=$PROJECT_DIR/models/avatar.jpg python main.py 2>&1 | tee /var/log/deepfake.log" \
+  "cd $PROJECT_DIR/server && PYTHONPATH=. LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH SOURCE_FACE=$PROJECT_DIR/models/avatar.jpg python main.py 2>&1 | tee /var/log/deepfake.log" \
   Enter
 
 echo "==> Waiting 25s for models to load..."

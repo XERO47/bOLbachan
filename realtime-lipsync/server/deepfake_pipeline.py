@@ -32,7 +32,7 @@ import numpy as np
 # ORT's internal search path even though it's in the system linker path.
 for _lib in ("libnvinfer.so.8", "libnvinfer_plugin.so.8"):
     try:
-        ctypes.CDLL(_lib)
+        ctypes.CDLL(_lib, mode=ctypes.RTLD_GLOBAL)
     except OSError:
         pass
 
