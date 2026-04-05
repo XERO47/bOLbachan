@@ -58,24 +58,30 @@ def _build_providers():
 
     os.makedirs(_TRT_CACHE, exist_ok=True)
 
-    trt_opts = {
+    # FP16 for face analysis models (detection, landmark, recognition) — safe
+    trt_fp16_opts = {
         "device_id": 0,
-        "trt_max_workspace_size": 4 * 1024 * 1024 * 1024,  # 4 GB
-        "trt_fp16_enable": False,
+        "trt_max_workspace_size": 2 * 1024 * 1024 * 1024,
+        "trt_fp16_enable": True,
         "trt_engine_cache_enable": True,
         "trt_engine_cache_path": _TRT_CACHE,
         "trt_timing_cache_enable": True,
         "trt_timing_cache_path": _TRT_CACHE,
     }
 
-    return [
-        ("TensorrtExecutionProvider", trt_opts),
+    face_providers = [
+        ("TensorrtExecutionProvider", trt_fp16_opts),
         ("CUDAExecutionProvider", {"device_id": 0}),
         "CPUExecutionProvider",
     ]
 
+    # Plain CUDA for inswapper — FP16 causes color artifacts in this model
+    swap_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
-_ORT_PROVIDERS = _build_providers()
+    return face_providers, swap_providers
+
+
+_FACE_PROVIDERS, _SWAP_PROVIDERS = _build_providers()
 
 
 # ── Masks ─────────────────────────────────────────────────────────────────────
@@ -86,7 +92,7 @@ def _face_mask_106(shape, lm106: np.ndarray) -> np.ndarray:
     hull = cv2.convexHull(lm106.astype(np.int32))
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, hull, 255)
-    return cv2.GaussianBlur(mask, (31, 31), 11)
+    return cv2.GaussianBlur(mask, (15, 15), 5)
 
 
 def _mouth_mask(shape, kps: np.ndarray, scale: float = 1.0) -> np.ndarray:
@@ -122,7 +128,7 @@ def _mouth_mask(shape, kps: np.ndarray, scale: float = 1.0) -> np.ndarray:
 
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
-    return cv2.GaussianBlur(mask, (31, 31), 11)
+    return cv2.GaussianBlur(mask, (15, 15), 5)
 
 
 def _blend(src: np.ndarray, dst: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -142,12 +148,11 @@ class DeepFakePipeline:
         self.face_app = insightface.app.FaceAnalysis(
             name="buffalo_l",
             root=str(_PROJECT_DIR),
-            providers=_ORT_PROVIDERS,
+            providers=_FACE_PROVIDERS,
             allowed_modules=["detection", "landmark_2d_106", "recognition"],
         )
         self.face_app.prepare(ctx_id=0, det_size=(320, 320))
 
-        # Log which provider is actually active
         det_model = next(iter(self.face_app.models.values()))
         active = getattr(det_model.session, 'get_providers', lambda: ['?'])()
         logger.info("InsightFace FaceAnalysis ready — provider: %s", active[0] if active else '?')
@@ -155,7 +160,7 @@ class DeepFakePipeline:
         if not INSWAPPER_CKPT.exists():
             raise FileNotFoundError(f"inswapper_128.onnx not found at {INSWAPPER_CKPT}")
         self.swapper = insightface.model_zoo.get_model(
-            str(INSWAPPER_CKPT), providers=_ORT_PROVIDERS
+            str(INSWAPPER_CKPT), providers=_SWAP_PROVIDERS
         )
         logger.info("Inswapper ready")
 
