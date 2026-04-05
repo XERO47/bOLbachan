@@ -30,8 +30,37 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_DIR   = Path(__file__).parent.parent.resolve()
 INSWAPPER_CKPT = _PROJECT_DIR / "models" / "inswapper_128.onnx"
-_ORT_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+_TRT_CACHE     = str(_PROJECT_DIR / "models" / "trt_cache")
 _MAX_CACHE     = 5
+
+# ── TensorRT provider (FP16, engine cache) ─────────────────────────────────────
+# Shape profiles are fixed to exactly what we send so TRT compiles optimal engines:
+#   det_10g:    input.1  [1,3,320,320]   (det_size=320)
+#   2d106det:   data     [1,3,192,192]
+#   w600k_r50:  input.1  [1,3,112,112]
+#   inswapper:  target   [1,3,128,128] + source [1,512]  (already static)
+#
+# First startup after clearing the cache will take 3-5 minutes while TRT
+# compiles engines. After that, cached .engine files are loaded in ~1s.
+_TRT_OPTIONS = {
+    "device_id": 0,
+    "trt_max_workspace_size": 4 * 1024 * 1024 * 1024,   # 4 GB
+    "trt_fp16_enable": True,
+    "trt_engine_cache_enable": True,
+    "trt_engine_cache_path": _TRT_CACHE,
+    "trt_timing_cache_enable": True,
+    "trt_timing_cache_path": _TRT_CACHE,
+    # Fixed shapes — no dynamic overhead, TRT builds the tightest possible kernel
+    "trt_profile_min_shapes": "input.1:1x3x112x112,data:1x3x192x192",
+    "trt_profile_opt_shapes": "input.1:1x3x112x112,data:1x3x192x192",
+    "trt_profile_max_shapes": "input.1:1x3x112x112,data:1x3x192x192",
+}
+
+_ORT_PROVIDERS = [
+    ("TensorrtExecutionProvider", _TRT_OPTIONS),
+    ("CUDAExecutionProvider", {"device_id": 0}),
+    "CPUExecutionProvider",
+]
 
 
 # ── Masks ─────────────────────────────────────────────────────────────────────
@@ -94,6 +123,20 @@ class DeepFakePipeline:
 
     def __init__(self):
         import insightface
+        import os
+        os.makedirs(_TRT_CACHE, exist_ok=True)
+
+        # Detect whether TRT engines are already cached
+        import glob
+        cached = glob.glob(f"{_TRT_CACHE}/*.engine")
+        if cached:
+            logger.info("TensorRT engine cache found (%d engines) — fast load", len(cached))
+        else:
+            logger.warning(
+                "No TRT engine cache found at %s — first startup will compile "
+                "TensorRT engines (3-5 min). Subsequent starts will be instant.",
+                _TRT_CACHE,
+            )
 
         self.face_app = insightface.app.FaceAnalysis(
             name="buffalo_l",
@@ -143,15 +186,16 @@ class DeepFakePipeline:
             logger.info("Warmup: no face in avatar image — inswapper will warm up on first set_source call")
 
     def _warmup_inswapper(self, image_bgr: np.ndarray, face) -> None:
-        """Run inswapper N times on a real face to compile CUDA kernels."""
+        """Run inswapper to compile TRT engine (first call) or warm CUDA (subsequent)."""
         import time
         t0 = time.time()
+        logger.info("Running inswapper warmup (may take several minutes on first TRT compile)…")
         for _ in range(5):
             try:
                 self.swapper.get(image_bgr.copy(), face, face, paste_back=True)
             except Exception:
                 pass
-        logger.info("Inswapper warmup done in %.1fs — CUDA kernels compiled", time.time() - t0)
+        logger.info("Inswapper warmup done in %.1fs", time.time() - t0)
 
     def set_source(self, image_bgr: np.ndarray) -> str:
         faces = self.face_app.get(image_bgr)
