@@ -292,7 +292,7 @@ button:disabled { opacity: 0.35; cursor: default; }
 
 <div class="server-row">
   Server:
-  <input id="serverUrl" type="text" value="ws://205.147.102.96:8000/ws/deepfake">
+  <input id="serverUrl" type="text" value="auto">
 </div>
 
 <div class="status-row">
@@ -326,12 +326,17 @@ button:disabled { opacity: 0.35; cursor: default; }
 
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
-// Config
+// Config — auto-detect server from current page URL
 // ─────────────────────────────────────────────────────────────────────────────
 const TARGET_FPS      = 25;
 const FRAME_INTERVAL  = 1000 / TARGET_FPS;
 const JPEG_QUALITY    = 0.8;
 const CAP_W = 640, CAP_H = 480;
+
+// Derive WS URL from window.location so it works on any IP or Cloudflare domain
+const _proto  = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const _autoWs = `${_proto}//${location.host}/ws/deepfake`;
+document.getElementById('serverUrl').value = _autoWs;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -388,9 +393,7 @@ async function uploadFace(file) {
   form.append('file', file);
 
   try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/api/source-face', {
+    const resp = await fetch('/api/source-face', {
       method: 'POST', body: form,
     });
     const data = await resp.json();
@@ -547,9 +550,7 @@ async function updateMouthScale(val) {
 
 async function toggleSetting(key, val) {
   try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/api/settings', {
+    const resp = await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: val }),
@@ -564,10 +565,7 @@ async function toggleSetting(key, val) {
 // Fetch pre-loaded face status on load
 (async () => {
   try {
-    const serverBase = document.getElementById('serverUrl').value
-      .replace(/^ws/, 'http').replace('/ws/deepfake', '');
-    const resp = await fetch(serverBase + '/health');
-    const data = await resp.json();
+    const data = await fetch('/health').then(r => r.json());
     if (data.source_face_set) {
       setFaceStatus('Face ready (pre-loaded)', 'green');
       sourceReady = true;
@@ -575,6 +573,14 @@ async function toggleSetting(key, val) {
     }
   } catch(_) {}
 })();
+
+// Keep streaming when tab is in background (prevent browser throttling)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && captureTimer) {
+    clearInterval(captureTimer);
+    captureTimer = setInterval(sendFrame, FRAME_INTERVAL);
+  }
+});
 </script>
 </body>
 </html>
