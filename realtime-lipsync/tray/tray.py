@@ -94,24 +94,11 @@ async def _ws_loop(cfg: dict):
     interval = 1.0 / fps
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
 
-    # Try backends in order — external USB webcams often need MSMF on Windows
-    cap = None
-    for backend in [cv2.CAP_MSMF, cv2.CAP_DSHOW, -1]:
-        try:
-            c = cv2.VideoCapture(cam_idx, backend) if backend != -1 else cv2.VideoCapture(cam_idx)
-            if c.isOpened():
-                ret, _ = c.read()
-                if ret:
-                    cap = c
-                    print(f"[tray] Camera {cam_idx} opened")
-                    break
-                c.release()
-        except Exception:
-            pass
-
-    if cap is None:
+    cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
+    if not cap.isOpened():
         print(f"[tray] Cannot open camera {cam_idx} — try a different index in config.json")
         return
+    print(f"[tray] Camera {cam_idx} opened")
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  w)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)

@@ -1,6 +1,6 @@
 {
   "server": "ws://205.147.102.96:8000/ws/deepfake",
-  "cam": 0,
+  "cam": 3,
   "fps": 25,
   "quality": 85
 }
