@@ -119,19 +119,31 @@ class DeepFakePipeline:
         logger.info("DeepFakePipeline ready")
 
     def _warmup(self):
-        """Push dummy frames through both models to JIT-compile CUDA kernels."""
-        import time
-        logger.info("Warming up CUDA kernels…")
-        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        # Warmup face detector
-        for _ in range(3):
-            self.face_app.get(dummy)
+        """Warm up the full pipeline (detector + inswapper) using avatar against itself."""
+        import time, os
         t0 = time.time()
-        # Warmup with a real-looking frame (random noise so detector tries)
-        noise = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        for _ in range(5):
-            self.face_app.get(noise)
-        logger.info("Warmup done in %.1fs", time.time() - t0)
+        src = os.environ.get("SOURCE_FACE", "")
+        avatar = None
+        if src:
+            avatar = cv2.imread(src)
+        if avatar is None:
+            # Make a synthetic face-like image (skin tone rectangle)
+            avatar = np.full((480, 640, 3), (120, 100, 80), dtype=np.uint8)
+
+        logger.info("Warming up CUDA kernels (full pipeline)…")
+        faces = self.face_app.get(avatar)
+        if faces:
+            faces.sort(key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)
+            src_face = faces[0]
+            # Run inswapper several times to compile CUDA kernels
+            for _ in range(5):
+                try:
+                    self.swapper.get(avatar, faces[0], src_face, paste_back=True)
+                except Exception:
+                    pass
+            logger.info("Warmup done in %.1fs — inswapper kernels compiled", time.time() - t0)
+        else:
+            logger.info("Warmup: no face in avatar image, skipping inswapper warmup")
 
     def set_source(self, image_bgr: np.ndarray) -> str:
         faces = self.face_app.get(image_bgr)
