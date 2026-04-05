@@ -20,11 +20,21 @@ Face cache:
 
 from __future__ import annotations
 
+import ctypes
 import logging
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+# Pre-load TRT shared libraries so ORT's TensorrtExecutionProvider can find them.
+# On some Linux installs the libs are in /usr/lib/x86_64-linux-gnu which isn't in
+# ORT's internal search path even though it's in the system linker path.
+for _lib in ("libnvinfer.so.8", "libnvinfer_plugin.so.8"):
+    try:
+        ctypes.CDLL(_lib)
+    except OSError:
+        pass
 
 logger = logging.getLogger(__name__)
 
